@@ -15,6 +15,7 @@ cmake_install.cmake
 CTestTestfile.cmake
 _CPack_Packages/
 install_manifest.txt
+.cache/
 # Keep compile_commands.json — useful for clangd / IDE tooling
 # compile_commands.json
 
