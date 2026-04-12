@@ -134,6 +134,8 @@ GmidCharResult* gmid_characterise(
         cfg.device_name = std::move(*name);
     }
 
+    cfg.subcircuit = gmid::is_subcircuit(cfg.model_file, cfg.device_name);
+
     auto result = gmid::characterise(cfg, out_dir ? out_dir : ".");
     if (!result.ok()) {
         std::snprintf(cr->error, sizeof(cr->error), "%s", result.error.c_str());

@@ -16,6 +16,7 @@
 #include "gmid/plots.hpp"
 #include "gmid/simulator.hpp"
 #include "gmid/simulators/ngspice.hpp"
+#include "gmid/simulators/xyce.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -69,6 +70,7 @@ int main(int argc, char *argv[]) {
   std::filesystem::path out_dir;
   std::string_view kind_str;
   std::string device_name;
+  std::string_view simulator_str = "ngspice";
 
   gmid::SweepConfig cfg; // initialised with sensible defaults from the struct
 
@@ -90,6 +92,10 @@ int main(int argc, char *argv[]) {
     }
     if (arg == "--device-name" && i + 1 < argc) {
       device_name = argv[++i];
+      continue;
+    }
+    if (arg == "--simulator" && i + 1 < argc) {
+      simulator_str = argv[++i];
       continue;
     }
 
@@ -166,14 +172,23 @@ int main(int argc, char *argv[]) {
   cfg.kind =
       (kind_str == "bjt") ? gmid::ModelKind::bjt : gmid::ModelKind::mosfet;
   cfg.work_dir = out_dir / "work";
+  cfg.subcircuit = gmid::is_subcircuit(model_file, device_name);
 
-  std::cerr << "info: device='" << device_name << "'  VGS=[" << cfg.vgs_start
-            << "," << cfg.vgs_stop << "]V"
+  std::cerr << "info: device='" << device_name << "'"
+            << (cfg.subcircuit ? " (subckt)" : " (model)")
+            << "  VGS=[" << cfg.vgs_start << "," << cfg.vgs_stop << "]V"
             << "  VDS=[" << cfg.vds_start << "," << cfg.vds_stop << "]V"
-            << "  W=" << cfg.width_um << "um  L=" << cfg.length_um << "um\n";
+            << "  W=" << cfg.width_um << "um  L=" << cfg.length_um << "um"
+            << "  sim=" << simulator_str << "\n";
 
-  gmid::NgspiceBackend sim;
-  auto sweep = sim.run(cfg);
+  std::expected<gmid::SweepResult, std::string> sweep;
+  if (simulator_str == "xyce") {
+    gmid::XyceBackend sim;
+    sweep = sim.run(cfg);
+  } else {
+    gmid::NgspiceBackend sim;
+    sweep = sim.run(cfg);
+  }
   if (!sweep) {
     std::cerr << "error: " << sweep.error() << '\n';
     return 1;

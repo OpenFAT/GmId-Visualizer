@@ -36,6 +36,10 @@ struct SweepConfig {
     // Temperature
     double temp_c = 27.0;
 
+    // True when the device is defined via .subckt (e.g. sky130 PDK)
+    // — netlist must use "X1 … <name>" instead of "M1 … <name>"
+    bool subcircuit = false;
+
     // Working directory for intermediate files
     std::filesystem::path work_dir;
 };
