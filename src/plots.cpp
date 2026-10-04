@@ -108,7 +108,9 @@ MosfetSlice extract_mosfet_slice(const SweepResult& r, const SweepConfig& cfg) {
         const std::size_t k = base + i;
         if (k >= r.size()) break;
 
-        const double id = r.id[k];
+        // abs(): PMOS sweeps VGS/VDS negative, so id comes back negative; the
+        // step signs flip with it, so gm and gds stay positive without abs.
+        const double id = std::abs(r.id[k]);
         if (id <= 1e-12) continue;   // below threshold — skip
 
         // gm: central difference within this VDS slice (safe, no block cross)
@@ -160,8 +162,9 @@ BjtSlice extract_bjt_slice(const SweepResult& r, const SweepConfig& cfg) {
         const std::size_t k = base + i;
         if (k >= r.size()) break;
 
-        const double ic = r.id[k];
-        const double ib = r.vth[k];   // ib stored in vth slot
+        // abs(): same sign flip as PMOS, for PNP
+        const double ic = std::abs(r.id[k]);
+        const double ib = std::abs(r.vth[k]);   // ib stored in vth slot
         if (ic <= 1e-12 || ib <= 1e-20) continue;
 
         // gm: central difference within VCE slice

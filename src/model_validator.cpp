@@ -374,8 +374,15 @@ find_pdk_parameter_files(const std::filesystem::path& model_file) {
 }
 
 std::expected<std::string, std::string>
-resolve_model_with_deps(const std::filesystem::path& model_file) {
+resolve_model_with_deps(const std::filesystem::path& model_file_arg) {
     namespace fs = std::filesystem;
+    // Absolute first: a bare filename has an empty parent_path(), which
+    // directory_iterator throws on, and the PDK walk-up below needs real parents.
+    std::error_code ec;
+    const auto model_file = fs::absolute(model_file_arg, ec);
+    if (ec)
+        return std::unexpected("cannot resolve path: " + model_file_arg.string()
+                               + " (" + ec.message() + ")");
     std::unordered_set<std::string> visited;
     std::ostringstream out;
 

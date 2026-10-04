@@ -55,3 +55,19 @@ target_compile_options(gmid_runner PRIVATE
     -O2
     -fno-rtti
 )
+
+# --------------------------------------------------------------------------
+# Install  (nix build / cmake --install)
+# --------------------------------------------------------------------------
+
+install(TARGETS GmIDVisualizer gmid_runner)
+install(DIRECTORY include/ TYPE INCLUDE)
+
+# --------------------------------------------------------------------------
+# Regression tests  (no simulator needed)
+# --------------------------------------------------------------------------
+
+enable_testing()
+add_executable(gmid_regression tests/regression.cpp)
+target_link_libraries(gmid_regression PRIVATE GmIDVisualizer)
+add_test(NAME regression COMMAND gmid_regression)
