@@ -30,6 +30,19 @@
       };
     in
     {
+      # The library only. No Xyce: characterise() and the C FFI always use ngspice,
+      # which is shelled out to at runtime (never linked) and is in cache.nixos.org.
+      # Xyce is only reachable through `gmid_runner --simulator xyce` (dev shell).
+      packages.${system}.default = pkgs.stdenv.mkDerivation {
+        pname = "gmidvisualizer";
+        version = "0.1.0";
+        src = self;
+        nativeBuildInputs = with pkgs; [ cmake ninja ];
+        # Puts ngspice on PATH for whoever installs this, which the .so needs to run.
+        propagatedBuildInputs = [ pkgs.ngspice ];
+        doCheck = true;   # tests/regression.cpp, simulator-free
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         CC = "clang";
         CXX = "clang++";

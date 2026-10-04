@@ -17,6 +17,13 @@ cmake -B build -G Ninja
 cmake --build build
 ```
 
+Or as a package (library + headers + `gmid_runner`, no Xyce):
+
+```sh
+nix build github:OmarSiwy/GmIDVisualizer   # result/lib/libGmIDVisualizer.so
+ctest --test-dir build                     # regression tests, no simulator needed
+```
+
 This produces two targets:
 
 - **`libGmIDVisualizer.so`** — shared library (Schemify plugin or link into your own app)
