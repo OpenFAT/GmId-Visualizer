@@ -44,13 +44,14 @@ CharResult characterise(const SweepConfig&           cfg,
         const auto sl = extract_mosfet_slice(*sweep, cfg);
 
         // Build per-plot LUTs matching the axis pairs in generate_mosfet_set
-        const std::array<std::vector<LutPoint>, 6> luts = {{
+        const std::array<std::vector<LutPoint>, 7> luts = {{
             zip_lut(sl.gmid, sl.jd),    // gm/Id vs current density
             zip_lut(sl.gmid, sl.gm),    // gm/Id vs gm
             zip_lut(sl.gmid, sl.gds),   // gm/Id vs gds
             zip_lut(sl.gmid, sl.av),    // gm/Id vs intrinsic gain
             zip_lut(sl.vgs,  sl.gmid),  // VGS vs gm/Id
             zip_lut(sl.vgs,  sl.id),    // VGS vs Id
+            zip_lut(sl.gmid, sl.cgg),   // gm/Id vs Cgg (append only, FFI index 6)
         }};
 
         cr.plots.reserve(mosfet_specs.size());

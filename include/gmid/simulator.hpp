@@ -64,19 +64,22 @@ struct SweepResult {
     std::vector<double> cgs;
     std::vector<double> cgd;
     std::vector<double> vth;
+    // Total gate capacitance incl. overlaps (F, > 0). 0 when the model does
+    // not report it (only BSIM3/4 do in ngspice).
+    std::vector<double> cgg;
 
     [[nodiscard]] std::size_t size() const noexcept { return id.size(); }
 
     void reserve(std::size_t n) {
         vgs.reserve(n); vds.reserve(n); vbs.reserve(n);
         id.reserve(n);  gm.reserve(n);  gds.reserve(n);
-        cgs.reserve(n); cgd.reserve(n); vth.reserve(n);
+        cgs.reserve(n); cgd.reserve(n); vth.reserve(n); cgg.reserve(n);
     }
 
     void clear() noexcept {
         vgs.clear(); vds.clear(); vbs.clear();
         id.clear();  gm.clear();  gds.clear();
-        cgs.clear(); cgd.clear(); vth.clear();
+        cgs.clear(); cgd.clear(); vth.clear(); cgg.clear();
     }
 };
 

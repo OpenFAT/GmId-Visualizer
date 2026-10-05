@@ -136,6 +136,7 @@ MosfetSlice extract_mosfet_slice(const SweepResult& r, const SweepConfig& cfg) {
         sl.gm.push_back(gm);
         sl.gds.push_back(gds);
         sl.av.push_back(gm / gds);
+        sl.cgg.push_back(k < r.cgg.size() ? r.cgg[k] : 0.0);
     }
     return sl;
 }
@@ -204,13 +205,14 @@ generate_mosfet_set(const SweepResult& data, const SweepConfig& cfg,
 
     const auto sl = extract_mosfet_slice(data, cfg);
 
-    const std::array<PlotSeries, 6> series {{
+    const std::array<PlotSeries, 7> series {{
         {sl.gmid, sl.jd},    // gm/Id vs current density
         {sl.gmid, sl.gm},    // gm/Id vs gm
         {sl.gmid, sl.gds},   // gm/Id vs gds
         {sl.gmid, sl.av},    // gm/Id vs intrinsic gain
         {sl.vgs,  sl.gmid},  // VGS vs gm/Id
         {sl.vgs,  sl.id},    // VGS vs Id
+        {sl.gmid, sl.cgg},   // gm/Id vs Cgg
     }};
 
     std::vector<std::filesystem::path> paths;

@@ -154,6 +154,7 @@ XyceBackend::parse_output(const std::filesystem::path& prn_file,
             res.cgs.push_back(0.0);
             res.cgd.push_back(0.0);
             res.vth.push_back(ib);   // ib in vth slot for BJT beta
+            res.cgg.push_back(0.0);
         } else {
             double idx, id, gm, gds, cgs, cgd, vth;
             if (!(ss >> idx >> id >> gm >> gds >> cgs >> cgd >> vth))
@@ -168,6 +169,7 @@ XyceBackend::parse_output(const std::filesystem::path& prn_file,
             res.cgs.push_back(cgs);
             res.cgd.push_back(cgd);
             res.vth.push_back(vth);
+            res.cgg.push_back(0.0);  // ponytail: Xyce cgg not wired, ngspice is the FFI path
         }
     }
 

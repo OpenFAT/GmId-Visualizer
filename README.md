@@ -2,9 +2,9 @@
 
 MOSFET and BJT gm/Id characterisation tool. Runs DC sweeps via ngspice or Xyce, then generates SVG plots of the standard analog design figures of merit.
 
-Produces 6 plots per device:
+Produces 6 plots per device (7 for MOSFETs):
 
-**MOSFET:** gm/Id vs Jd, gm, gds, intrinsic gain; VGS vs gm/Id, Id
+**MOSFET:** gm/Id vs Jd, gm, gds, intrinsic gain; VGS vs gm/Id, Id; gm/Id vs Cgg (appended last, index 6)
 **BJT:** gm/Ic vs Jc, gm, intrinsic gain, beta; VBE vs gm/Ic, Ic
 
 ## Building
@@ -90,13 +90,19 @@ GmidCharResult* r = gmid_characterise(
     10.0, 0.18, 27.0  /* W, L, T */
 );
 /* use r->plots[i].svg_path, r->plots[i].lut ... */
+/* MOSFET plot 6: x = gm/Id, y = total Cgg in F at width_um (BSIM cgg + overlaps,
+   ngspice @m[cgg]+[cgso]+[cgdo]+[cgbo]); ft = gm / (2*pi*Cgg) with plot 1.
+   0 when the model reports no cgg (non-BSIM). Plot indices 0..5 are stable. */
 gmid_free_result(r);
 ```
 
 ## Simulator backends
 
 - **ngspice** (default) — must be on `$PATH`
-- **Xyce** — used when available; accesses internal OP parameters directly
+- **Xyce** — used when available; accesses internal OP parameters directly (no Cgg yet)
+
+A backend is a type satisfying the `Simulator` concept in `include/gmid/simulator.hpp`
+that returns a `SweepResult` (vgs/vds/id, plus `cgg` per point); add it to `SimulatorVar`.
 
 ## License
 

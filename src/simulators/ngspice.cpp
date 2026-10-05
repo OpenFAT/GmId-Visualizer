@@ -1,6 +1,8 @@
 #include "gmid/simulators/ngspice.hpp"
 #include "gmid/model_validator.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <format>
@@ -17,6 +19,39 @@ namespace gmid {
 bool NgspiceBackend::available() const {
     std::string cmd = ngspice_bin.string() + " -v > /dev/null 2>&1";
     return std::system(cmd.c_str()) == 0;
+}
+
+// ---------------------------------------------------------------------------
+// ngspice vector path of the MOSFET inside the DUT, for @<path>[param].
+// Plain model: "m1". Subckt-wrapped (sky130): "m.x1.<first m-line in the
+// .subckt body>", e.g. "m.x1.msky130_fd_pr__nfet_01v8". "" if none found.
+// ---------------------------------------------------------------------------
+
+static std::string mosfet_vec_path(const std::string& model_text, const SweepConfig& cfg) {
+    if (!cfg.subcircuit) return "m1";
+    auto lower = [](std::string s) {
+        std::ranges::transform(s, s.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return s;
+    };
+    const std::string want = lower(cfg.device_name);
+    std::istringstream in(model_text);
+    std::string line;
+    bool inside = false;
+    while (std::getline(in, line)) {
+        std::istringstream ss(lower(line));
+        std::string tok;
+        if (!(ss >> tok)) continue;
+        if (!inside) {
+            std::string name;
+            inside = tok == ".subckt" && (ss >> name) && name == want;
+        } else if (tok == ".ends") {
+            return "";
+        } else if (tok[0] == 'm') {
+            return "m.x1." + tok;
+        }
+    }
+    return "";
 }
 
 // ---------------------------------------------------------------------------
@@ -44,11 +79,10 @@ NgspiceBackend::write_netlist(const SweepConfig& cfg) const {
 
     // Recursively resolve model file + sibling mismatch files into one flat file.
     // This handles sky130 PDK corner files whose .include chains aren't self-contained.
+    auto resolved = resolve_model_with_deps(cfg.model_file);
+    if (!resolved)
+        return std::unexpected("include resolution failed: " + resolved.error());
     {
-        auto resolved = resolve_model_with_deps(cfg.model_file);
-        if (!resolved)
-            return std::unexpected("include resolution failed: " + resolved.error());
-
         const auto resolved_path = cfg.work_dir / "resolved_model.spice";
         std::ofstream resolved_file(resolved_path);
         if (!resolved_file)
@@ -72,6 +106,15 @@ NgspiceBackend::write_netlist(const SweepConfig& cfg) const {
         out << "Vgs g 0 0\n";
         out << "Vds d 0 0\n\n";
         out << ".control\n";
+        // Total Cgg = BSIM intrinsic cgg + the overlap caps, which BSIM4's
+        // cgg omits (sky130 nfet L=0.3: 16.8 fF intrinsic vs 21.7 fF AC-measured).
+        // ponytail: cgso/cgdo are the bias-independent overlaps; models with
+        // cgsl/cgdl != 0 (capMod 2 bias-dependent overlap) under-report by that part.
+        const auto p = mosfet_vec_path(*resolved, cfg);
+        const auto cap = [&p](std::string_view q) { return std::format("@{}[{}]", p, q); };
+        if (!p.empty())
+            out << std::format("save i(Vds) {} {} {} {}\n",
+                               cap("cgg"), cap("cgso"), cap("cgdo"), cap("cgbo"));
         out << std::format("dc Vgs {} {} {} Vds {} {} {}\n",
                            cfg.vgs_start, cfg.vgs_stop, vgs_step,
                            cfg.vds_start, cfg.vds_stop, vds_step);
@@ -79,6 +122,13 @@ NgspiceBackend::write_netlist(const SweepConfig& cfg) const {
         // deriv() firing across VDS-block boundaries in the flat wrdata array.
         out << "let id = -i(Vds)\n";
         out << std::format("wrdata {} id\n", data_path.string());
+        // Separate file: a model without cgg (non-BSIM) fails this `let`, ngspice
+        // carries on, no file is written, and the parser leaves cgg at 0.
+        if (!p.empty()) {
+            out << std::format("let cgg = {} + {} + {} + {}\n",
+                               cap("cgg"), cap("cgso"), cap("cgdo"), cap("cgbo"));
+            out << std::format("wrdata {} cgg\n", (cfg.work_dir / "sweep_cgg").string());
+        }
     } else {
         // BJT: correct node names (b = base, c = collector, emitter to GND)
         if (cfg.subcircuit) {
@@ -185,6 +235,14 @@ NgspiceBackend::parse_wrdata(const std::filesystem::path& data_file,
     if (res.size() == 0)
         return std::unexpected("no data points parsed from wrdata output");
 
+    // Optional cgg file (vgs, cgg), same row order as the main file.
+    res.cgg.assign(res.size(), 0.0);
+    if (std::ifstream cin_(data_file.parent_path() / "sweep_cgg"); cin_) {
+        std::size_t i = 0;
+        double v, c;
+        while (i < res.size() && cin_ >> v >> c) res.cgg[i++] = c;
+    }
+
     // Back-fill vds from sweep structure (outer loop = Vds/Vce)
     const auto n_vgs    = static_cast<std::size_t>(cfg.vgs_steps);
     const double vd_step = (cfg.vds_stop - cfg.vds_start) / std::max(cfg.vds_steps - 1, 1);
@@ -200,6 +258,8 @@ NgspiceBackend::parse_wrdata(const std::filesystem::path& data_file,
 
 std::expected<SweepResult, std::string>
 NgspiceBackend::run(const SweepConfig& cfg) const {
+    std::error_code ec;
+    std::filesystem::remove(cfg.work_dir / "sweep_cgg", ec);   // no stale cgg from a previous run
     auto netlist = write_netlist(cfg);
     if (!netlist)
         return std::unexpected(netlist.error());

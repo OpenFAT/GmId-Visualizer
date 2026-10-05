@@ -40,7 +40,8 @@
         nativeBuildInputs = with pkgs; [ cmake ninja ];
         # Puts ngspice on PATH for whoever installs this, which the .so needs to run.
         propagatedBuildInputs = [ pkgs.ngspice ];
-        doCheck = true;   # tests/regression.cpp, simulator-free
+        doCheck = true;   # tests/regression.cpp; the cgg test runs ngspice
+        nativeCheckInputs = [ pkgs.ngspice ];
       };
 
       devShells.${system}.default = pkgs.mkShell {

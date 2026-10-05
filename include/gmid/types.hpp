@@ -52,13 +52,15 @@ struct PlotSpec {
     std::string_view filename;
 };
 
-inline constexpr std::array<PlotSpec, 6> mosfet_specs {{
+// Append only: gmid.py (AnalogIOC) indexes the C FFI plots by position.
+inline constexpr std::array<PlotSpec, 7> mosfet_specs {{
     {"Gm/Id  vs  Current Density",    "Gm/Id (1/V)",  "Jd (A/\u00B5m)",      "gmid_vs_current_density.svg"},
     {"Gm/Id  vs  Transconductance",   "Gm/Id (1/V)",  "gm (S)",              "gmid_vs_gm.svg"},
     {"Gm/Id  vs  Output Conductance", "Gm/Id (1/V)",  "gds (S)",             "gmid_vs_gds.svg"},
     {"Gm/Id  vs  Intrinsic Gain",     "Gm/Id (1/V)",  "gm/gds (V/V)",        "gmid_vs_av.svg"},
     {"VGS  vs  Gm/Id",                "VGS (V)",       "Gm/Id (1/V)",         "vgs_vs_gmid.svg"},
     {"VGS  vs  Drain Current",        "VGS (V)",       "Id (A)",              "vgs_vs_id.svg"},
+    {"Gm/Id  vs  Gate Capacitance",   "Gm/Id (1/V)",  "Cgg (F)",             "gmid_vs_cgg.svg"},
 }};
 
 inline constexpr std::array<PlotSpec, 6> bjt_specs {{

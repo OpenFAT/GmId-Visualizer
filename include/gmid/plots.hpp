@@ -29,6 +29,7 @@ struct MosfetSlice {
     std::vector<double> gds;   // S
     std::vector<double> gmid;  // V⁻¹  (gm / Id)
     std::vector<double> av;    // V/V  (gm / gds)
+    std::vector<double> cgg;   // F    total gate capacitance at width_um
 };
 
 struct BjtSlice {
