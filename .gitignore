@@ -48,3 +48,7 @@ Thumbs.db
 # ── Miscellaneous ─────────────────────────────────────────────────────────────
 *.bak
 *.orig
+
+# ── Rust ──
+/target/
+!tests/fixtures/*.raw

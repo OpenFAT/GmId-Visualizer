@@ -1,0 +1,7 @@
+schemify 1 project
+
+plugin gmid path gmid_lut.wasm
+  grant read_project
+  grant write_project
+  grant spawn:ngspice
+  grant spawn:espice

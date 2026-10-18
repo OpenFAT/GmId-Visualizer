@@ -1,0 +1,42 @@
+# The gm/Id Schemify plugin (a wasm32 guest, plugin ABI v1). The C++ library and CLI in cpp/
+# are a secondary interface with their own CMake build.
+[package]
+name = "gmid-lut"
+description = "gm/Id sizing plugin for Schemify (D20, D26): LUT-backed expression functions gmid.* and a ngspice characterization flow."
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.95"
+repository = "https://github.com/OmarSiwy/GmIDVisualizer"
+publish = false
+
+[lib]
+name = "gmid_lut"
+# cdylib: the wasm guest. rlib: the pure modules are unit-tested natively and reused by
+# `examples/characterize.rs` (the guest glue is compiled only for wasm32).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Pinned to a Schemify commit; the nightly workflow tests against Schemify `main` instead.
+schemify-abi = { git = "https://github.com/OmarSiwy/Schemify", rev = "df18b211f18d7263e59d579e13df96d265ea4012", features = ["guest"] }
+
+[dev-dependencies]
+# Drives the built guest in `tests/guest.rs` (event chain, fuel, `schemify_call`); same engine
+# configuration as the host (Schemify's `crates/plugin`).
+# The real host (`tests/host.rs`): what the editor loads the package with.
+schemify-plugin = { git = "https://github.com/OmarSiwy/Schemify", rev = "df18b211f18d7263e59d579e13df96d265ea4012" }
+wasmi = { version = "2", default-features = false, features = ["std", "validate", "auto-dispatch", "deterministic"] }
+
+[lints.rust]
+# `deny`, not `forbid`: `guest::export!` allows `unsafe(no_mangle)` on its four exports.
+unsafe_code = "deny"
+missing_docs = "warn"
+
+# Small module: size over speed, no unwinding (a panic is a trap the host reports).
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false

@@ -1,12 +1,16 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # The Rust toolchain of the Schemify plugin: the nixpkgs Schemify's flake.lock pins
+    # (rustc 1.95, wasm-ld), so `./build.sh` gives the same module bytes as Schemify's own build.
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/6510408d147d8c5e6d76043e899e9251756f6a75";
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, nixpkgs-rust }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      rust = nixpkgs-rust.legacyPackages.${system};
 
       volare = pkgs.python3Packages.buildPythonPackage rec {
         pname = "volare";
@@ -48,7 +52,15 @@
         CC = "clang";
         CXX = "clang++";
 
-        packages = with pkgs; [
+        packages = [
+          # The Schemify plugin (root crate): nixpkgs' rustc ships the wasm32-unknown-unknown
+          # std; wasm-ld links it (the nix rustc has no rust-lld).
+          rust.rustc
+          rust.cargo
+          rust.clippy
+          rust.rustfmt
+          rust.lld
+        ] ++ (with pkgs; [
           cmake
           ninja
           clang_19
@@ -60,7 +72,7 @@
 
           # PDK installer (optional — needed to test with real process models)
           volare
-        ];
+        ]);
       };
     };
 }
