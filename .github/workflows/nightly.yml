@@ -1,0 +1,26 @@
+# Daily: the plugin against Schemify `main` instead of the pinned rev, so a change in
+# Schemify's ABI or host shows up within a day instead of at the next rev bump. A failure here
+# means: bump the rev in Cargo.toml, fix what broke, rebuild the module.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  schemify-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - name: track Schemify main
+        run: |
+          sed -i 's|rev = "[0-9a-f]\{40\}"|branch = "main"|' Cargo.toml
+          nix develop -c cargo update -p schemify-abi
+      # tests/host.rs loads the committed module into main's host: the drift check.
+      - run: nix develop -c cargo test --no-fail-fast
+      - run: nix develop -c ./build.sh

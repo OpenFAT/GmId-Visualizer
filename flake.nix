@@ -1,12 +1,21 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # The Rust toolchain of the Schemify plugin: Rust 1.95.0 with rust-lld from rust-overlay at
+    # the rev Schemify's flake.lock pins, so `./build.sh` gives the same bytes as Schemify's CI.
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, rust-overlay }:
     let
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ rust-overlay.overlays.default ];
+      };
 
       volare = pkgs.python3Packages.buildPythonPackage rec {
         pname = "volare";
@@ -36,7 +45,7 @@
       packages.${system}.default = pkgs.stdenv.mkDerivation {
         pname = "gmidvisualizer";
         version = "0.1.0";
-        src = self;
+        src = ./cpp;
         nativeBuildInputs = with pkgs; [ cmake ninja ];
         # Puts ngspice on PATH for whoever installs this, which the .so needs to run.
         propagatedBuildInputs = [ pkgs.ngspice ];
@@ -48,7 +57,12 @@
         CC = "clang";
         CXX = "clang++";
 
-        packages = with pkgs; [
+        packages = [
+          # The Schemify plugin (root crate): Rust 1.95.0 with the wasm32 std and rust-lld.
+          (pkgs.rust-bin.stable."1.95.0".default.override {
+            targets = [ "wasm32-unknown-unknown" ];
+          })
+        ] ++ (with pkgs; [
           cmake
           ninja
           clang_19
@@ -60,7 +74,7 @@
 
           # PDK installer (optional — needed to test with real process models)
           volare
-        ];
+        ]);
       };
     };
 }

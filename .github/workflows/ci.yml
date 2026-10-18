@@ -1,0 +1,51 @@
+# Every push and PR: the Schemify plugin (root crate) and the secondary C++ library (cpp/).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The plugin, in the flake's dev shell (its rust-overlay input pins the Rust 1.95.0 and
+  # rust-lld Schemify builds with, so the module bytes are reproducible).
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - uses: Swatinem/rust-cache@v2
+      - run: nix develop -c cargo fmt --check
+      - run: nix develop -c cargo clippy --all-targets -- -D warnings
+      # Native unit tests, the guest under a stand-in wasmi host (tests/guest.rs) and the
+      # committed module through Schemify's real host (tests/host.rs).
+      - run: nix develop -c cargo test --no-fail-fast
+      - run: nix develop -c ./build.sh
+      # A PR that changes the plugin commits the rebuilt module from this artifact
+      # (`gh run download <run> -n gmid-lut-wasm`) or from its own `nix develop -c ./build.sh`.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gmid-lut-wasm
+          path: gmid_lut.wasm
+          if-no-files-found: error
+      - name: committed module equals the rebuild
+        run: |
+          git diff --quiet -- gmid_lut.wasm && exit 0
+          echo "::error::gmid_lut.wasm differs from ./build.sh output: commit the gmid-lut-wasm artifact of this run"
+          exit 1
+
+  # The C++ library and gmid_runner: `nix build` runs cpp/tests/regression.cpp (ctest).
+  cpp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - run: nix build -L .#default
