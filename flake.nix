@@ -36,7 +36,7 @@
       packages.${system}.default = pkgs.stdenv.mkDerivation {
         pname = "gmidvisualizer";
         version = "0.1.0";
-        src = self;
+        src = ./cpp;
         nativeBuildInputs = with pkgs; [ cmake ninja ];
         # Puts ngspice on PATH for whoever installs this, which the .so needs to run.
         propagatedBuildInputs = [ pkgs.ngspice ];

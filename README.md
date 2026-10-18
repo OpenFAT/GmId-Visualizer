@@ -13,6 +13,7 @@ Requires C++23 (clang 19+ or GCC 14+), CMake 3.25+, and ninja.
 
 ```sh
 nix develop            # or install deps manually
+cd cpp
 cmake -B build -G Ninja
 cmake --build build
 ```
@@ -21,7 +22,7 @@ Or as a package (library + headers + `gmid_runner`, no Xyce):
 
 ```sh
 nix build github:OmarSiwy/GmIDVisualizer   # result/lib/libGmIDVisualizer.so
-ctest --test-dir build                     # regression tests, no simulator needed
+ctest --test-dir cpp/build                   # regression tests, no simulator needed
 ```
 
 This produces two targets:
@@ -101,7 +102,7 @@ gmid_free_result(r);
 - **ngspice** (default) — must be on `$PATH`
 - **Xyce** — used when available; accesses internal OP parameters directly (no Cgg yet)
 
-A backend is a type satisfying the `Simulator` concept in `include/gmid/simulator.hpp`
+A backend is a type satisfying the `Simulator` concept in `cpp/include/gmid/simulator.hpp`
 that returns a `SweepResult` (vgs/vds/id, plus `cgg` per point); add it to `SimulatorVar`.
 
 ## License
