@@ -1,16 +1,21 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # The Rust toolchain of the Schemify plugin: the nixpkgs Schemify's flake.lock pins
-    # (rustc 1.95, wasm-ld), so `./build.sh` gives the same module bytes as Schemify's own build.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/6510408d147d8c5e6d76043e899e9251756f6a75";
+    # The Rust toolchain of the Schemify plugin: Rust 1.95.0 with rust-lld from rust-overlay at
+    # the rev Schemify's flake.lock pins, so `./build.sh` gives the same bytes as Schemify's CI.
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-rust }:
+  outputs = { self, nixpkgs, rust-overlay }:
     let
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-      rust = nixpkgs-rust.legacyPackages.${system};
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ rust-overlay.overlays.default ];
+      };
 
       volare = pkgs.python3Packages.buildPythonPackage rec {
         pname = "volare";
@@ -53,13 +58,10 @@
         CXX = "clang++";
 
         packages = [
-          # The Schemify plugin (root crate): nixpkgs' rustc ships the wasm32-unknown-unknown
-          # std; wasm-ld links it (the nix rustc has no rust-lld).
-          rust.rustc
-          rust.cargo
-          rust.clippy
-          rust.rustfmt
-          rust.lld
+          # The Schemify plugin (root crate): Rust 1.95.0 with the wasm32 std and rust-lld.
+          (pkgs.rust-bin.stable."1.95.0".default.override {
+            targets = [ "wasm32-unknown-unknown" ];
+          })
         ] ++ (with pkgs; [
           cmake
           ninja

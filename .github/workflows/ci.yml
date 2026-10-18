@@ -15,8 +15,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # The plugin, in the flake's dev shell (its nixpkgs-rust input pins the rustc and wasm-ld
-  # Schemify builds with, so the module bytes are reproducible).
+  # The plugin, in the flake's dev shell (its rust-overlay input pins the Rust 1.95.0 and
+  # rust-lld Schemify builds with, so the module bytes are reproducible).
   plugin:
     runs-on: ubuntu-latest
     steps:

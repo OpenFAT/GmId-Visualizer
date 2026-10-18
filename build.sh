@@ -4,11 +4,11 @@
 #
 # Reproducible: CI rebuilds the module and fails when the committed one differs. The bytes
 # depend only on the sources, Cargo.lock and the toolchain: build in `nix develop` (its
-# nixpkgs-rust input pins the rustc and wasm-ld) or commit the `gmid-lut-wasm` artifact of a
+# rust-overlay input pins rustc and rust-lld) or commit the `gmid-lut-wasm` artifact of a
 # CI run. Host paths are remapped out of the module (panic locations of git and registry
 # crates would otherwise name this checkout and ~/.cargo).
 #
-# Without a rust-lld on the toolchain (the nix rustc has none) it links with wasm-ld, re-running
+# Without a rust-lld on the toolchain (nixpkgs' rustc has none) it links with wasm-ld, re-running
 # itself under `nix shell nixpkgs#lld` when wasm-ld is not on PATH either.
 set -euo pipefail
 

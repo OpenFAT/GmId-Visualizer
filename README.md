@@ -313,7 +313,7 @@ dip. At gm/Id = 15, L = 0.5 µm the nfet has jd ≈ 2.6 A/m, gain ≈ 112 and ft
 
 ## Building and testing
 
-`nix develop` gives the toolchain (rustc and wasm-ld pinned to the nixpkgs Schemify builds with,
+`nix develop` gives the toolchain (Rust 1.95.0 with rust-lld from the rust-overlay rev Schemify builds with,
 ngspice, Xyce, the C++ toolchain). Schemify crates come in as git dependencies pinned to one
 Schemify commit (`rev` in `Cargo.toml`); for work against a local Schemify checkout, add
 `[patch."https://github.com/OmarSiwy/Schemify"]` entries pointing at its `crates/abi` and
