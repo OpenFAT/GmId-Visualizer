@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.95"
-repository = "https://github.com/OmarSiwy/GmIDVisualizer"
+repository = "https://github.com/OpenFAT/GmId-Visualizer"
 publish = false
 
 [lib]
@@ -18,13 +18,13 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Pinned to a Schemify commit; the nightly workflow tests against Schemify `main` instead.
-schemify-abi = { git = "https://github.com/OmarSiwy/Schemify", rev = "7a37e03be23fbc3fb743fa53c6430e7ab77941a0", features = ["guest"] }
+schemify-abi = { git = "https://github.com/OpenFAT/Schemify", rev = "1752960b3906f9b29765222531b5bfe29e8f6542", features = ["guest"] }
 
 [dev-dependencies]
 # Drives the built guest in `tests/guest.rs` (event chain, fuel, `schemify_call`); same engine
 # configuration as the host (Schemify's `crates/plugin`).
 # The real host (`tests/host.rs`): what the editor loads the package with.
-schemify-plugin = { git = "https://github.com/OmarSiwy/Schemify", rev = "7a37e03be23fbc3fb743fa53c6430e7ab77941a0" }
+schemify-plugin = { git = "https://github.com/OpenFAT/Schemify", rev = "1752960b3906f9b29765222531b5bfe29e8f6542" }
 wasmi = { version = "2", default-features = false, features = ["std", "validate", "auto-dispatch", "deterministic"] }
 
 [lints.rust]

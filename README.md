@@ -1,6 +1,6 @@
 # GmIDVisualizer: gm/Id sizing for Schemify
 
-A [Schemify](https://github.com/OmarSiwy/Schemify) plugin (a wasm guest, plugin ABI v1) that
+A [Schemify](https://github.com/OpenFAT/Schemify) plugin (a wasm guest, plugin ABI v1) that
 exports pure expression functions `gmid.*` (D20) backed by per-device lookup tables (LUTs), loads
 those tables from the project, and characterizes devices with ngspice or ESPice. The root crate
 (`gmid-lut`) is the plugin; the C++ library and `gmid_runner` CLI it grew out of are a secondary
@@ -13,7 +13,7 @@ As a user package (every project), in `~/.config/schemify/init.lua`:
 
 ```lua
 schemify.pack.add {
-  { src = "https://github.com/OmarSiwy/GmIDVisualizer",
+  { src = "https://github.com/OpenFAT/GmId-Visualizer",
     grant = { "read_project", "write_project", "spawn:ngspice", "spawn:espice" } },
 }
 ```
@@ -316,7 +316,7 @@ dip. At gm/Id = 15, L = 0.5 µm the nfet has jd ≈ 2.6 A/m, gain ≈ 112 and ft
 `nix develop` gives the toolchain (Rust 1.95.0 with rust-lld from the rust-overlay rev Schemify builds with,
 ngspice, Xyce, the C++ toolchain). Schemify crates come in as git dependencies pinned to one
 Schemify commit (`rev` in `Cargo.toml`); for work against a local Schemify checkout, add
-`[patch."https://github.com/OmarSiwy/Schemify"]` entries pointing at its `crates/abi` and
+`[patch."https://github.com/OpenFAT/Schemify"]` entries pointing at its `crates/abi` and
 `crates/plugin` in a `.cargo/config.toml` you do not commit.
 
 - `./build.sh` builds `gmid_lut.wasm` for `wasm32-unknown-unknown` at the repository root
@@ -366,7 +366,7 @@ cmake --build build
 Or as a package (library + headers + `gmid_runner`, no Xyce):
 
 ```sh
-nix build github:OmarSiwy/GmIDVisualizer   # result/lib/libGmIDVisualizer.so
+nix build github:OpenFAT/GmId-Visualizer   # result/lib/libGmIDVisualizer.so
 ctest --test-dir cpp/build                   # regression tests, no simulator needed
 ```
 
