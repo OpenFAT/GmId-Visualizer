@@ -5,7 +5,7 @@
 //! answer equals the native `eval` on the LUT it wrote.
 
 use gmid_lut::lut::Lut;
-use gmid_lut::{FN_STRIDE, Tables, chars, eval};
+use gmid_lut::{FN_STRIDE, JD, Tables, chars, eval};
 use schemify_abi::{Event, FUEL_DEFAULT, unpack};
 use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, TypedFunc};
 
@@ -206,10 +206,10 @@ fn guest_characterizes_and_answers_calls_within_the_fuel_budget() {
     );
     let (out, _) = g.done(2, 0, &std::fs::read(sample).unwrap());
     assert!(
-        out.contains("function gmid.jd 17 3") && out.contains("nsim loaded"),
+        out.contains("function gmid.jd 33 3") && out.contains("nsim loaded"),
         "{out}"
     );
-    let jd: f64 = g.call(17, "\"nsim\" 15 5e-7").unwrap().parse().unwrap();
+    let jd: f64 = g.call(33, "\"nsim\" 15 5e-7").unwrap().parse().unwrap();
     assert!((1.0..10.0).contains(&jd), "sample jd {jd}");
     let (out, _) = g.done(2, 0, b"stale handle");
     assert!(out.is_empty(), "a completed handle is forgotten: {out}");
@@ -252,7 +252,7 @@ fn guest_characterizes_and_answers_calls_within_the_fuel_budget() {
             "{out}"
         );
         assert_eq!(
-            out.contains("function gmid.jd 33 3"),
+            out.contains("function gmid.jd 65 3"),
             last,
             "re-declared at generation 2"
         );
@@ -269,10 +269,14 @@ fn guest_characterizes_and_answers_calls_within_the_fuel_budget() {
     let (out, _) = g.done(13, 0, b"");
     assert!(out.contains("nsim: LUT saved"), "{out}");
 
+    let jd = JD as u32;
     for (f, args) in [
         (1, "\"nsim\" 15 5e-7"),
         (2, "\"nsim\" 12 7e-7 2e-5"),
         (6, "\"nsim\" 10 3e-6"),
+        (jd + 1, "\"nsim\" 2.6 5e-7"),
+        (jd + 2, "\"nsim\" 2.6 7e-7 2e-5"),
+        (jd + 7 + 6, "\"nsim\" 0.3 3e-6 1.2"),
     ] {
         let want = eval(&t, f, args).unwrap();
         let got: f64 = g.call(f + 2 * FN_STRIDE, args).unwrap().parse().unwrap();
@@ -286,17 +290,27 @@ fn guest_characterizes_and_answers_calls_within_the_fuel_budget() {
     assert_eq!(g.call(1, "\"nsim\" 15 1e-3"), Err(6), "L out of range");
     assert_eq!(g.call(1, "garbage"), Err(6));
 
-    // A failed run logs and leaves the table alone.
+    // A failed run logs, writes the simulator's output to a project file (it can quote the
+    // kit's model files, so the log carries only its path) and leaves the table alone.
     g.event(&Event::Command {
         name: "gmid.characterize",
         args: "nsim",
     });
     g.done(14, 0, b"");
-    let (out, _) = g.done(15, 1, b"... Error: could not find a valid modelname");
+    let output = b"... Error on line 12: .model nch nmos level=54 tox=4e-9";
+    let (out, _) = g.done(15, 1, output);
     assert!(
-        out.contains("ngspice exited 1") && out.contains("valid modelname"),
+        out.contains("ngspice exited 1; its output is in .schemify/gmid/work/nsim.log")
+            && !out.contains(".model"),
         "{out}"
     );
+    let (op, path, data) = io(&g, 15);
+    assert_eq!(
+        (op, path.as_str(), &data[..]),
+        ("fs_write", ".schemify/gmid/work/nsim.log", &output[..])
+    );
+    let (out, _) = g.done(16, 0, b"");
+    assert!(out.is_empty(), "{out}");
     assert!(g.call(1, "\"nsim\" 15 5e-7").is_ok());
 }
 

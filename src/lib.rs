@@ -3,7 +3,8 @@
 //! with ngspice or ESPice. Ported from the UW-ASIC `gmid-lut` salvage (own code). Spec:
 //! `README.md`.
 //!
-//! - [`lut`] — the table, its `.glut` v2 file format, and the one query ([`lut::Lut::point_at`]);
+//! - [`lut`] — the table, its `.glut` v2 file format, and the one query, keyed by gm/Id
+//!   ([`lut::Lut::point_at`]) or by Id/W ([`lut::Lut::point_jd_at`]);
 //! - [`chars`] — the `gmid.chars` config, the sweep netlists, `wrdata` and raw-file parsing,
 //!   LUT building;
 //! - this module — the function set ([`FUNCTIONS`], [`eval`]), the loaded tables
@@ -21,11 +22,18 @@ use schemify_abi::{Code, text};
 use lut::Lut;
 
 /// Exported functions as `(name, arity)`; the index is the function's `fn_id` modulo
-/// [`FN_STRIDE`]. Arguments: device name, gm/Id (1/V), L (m), for the sized ones Id (A), and
-/// for the `_at` rows (index [`AT`] and up, row `AT + k` is row `k` plus the argument) |VDS|
-/// (V) last. The rows without it answer at the table's nominal VDS (`vdd / 2`). The last row,
-/// [`CLAMP_L`], is `gmid.l(dev, l)`: `l` clamped into the device table's L range.
-pub const FUNCTIONS: [(&str, u8); 15] = [
+/// [`FN_STRIDE`]. Two families on the same tables, one per sizing flow:
+///
+/// - rows `0..CLAMP_L`, keyed by gm/Id: device name, gm/Id (1/V), L (m), for the sized ones
+///   Id (A), and for the `_at` rows (index [`AT`] and up, row `AT + k` is row `k` plus the
+///   argument) |VDS| (V) last. Row 1 (`gmid.jd`) answers Id/W;
+/// - [`CLAMP_L`], `gmid.l(dev, l)`: `l` clamped into the device table's L range;
+/// - rows [`JD`]`..`, keyed by Id/W: the same seven quantities and their `_at` rows, in the
+///   same order, named `<f>_jd` / `<f>_jd_at`, with Id/W (A/m) in place of gm/Id. Row `JD + 1`
+///   (`gmid.gm_id_jd`) answers gm/Id: it is the inverse of `gmid.jd`.
+///
+/// The rows without VDS answer at the table's nominal VDS (`vdd / 2`).
+pub const FUNCTIONS: [(&str, u8); 29] = [
     ("gmid.vgs", 3),
     ("gmid.jd", 3),
     ("gmid.w", 4),
@@ -41,19 +49,36 @@ pub const FUNCTIONS: [(&str, u8); 15] = [
     ("gmid.gain_at", 4),
     ("gmid.ft_at", 4),
     ("gmid.l", 2),
+    ("gmid.vgs_jd", 3),
+    ("gmid.gm_id_jd", 3),
+    ("gmid.w_jd", 4),
+    ("gmid.gm_jd", 4),
+    ("gmid.gds_jd", 4),
+    ("gmid.gain_jd", 3),
+    ("gmid.ft_jd", 3),
+    ("gmid.vgs_jd_at", 4),
+    ("gmid.gm_id_jd_at", 4),
+    ("gmid.w_jd_at", 5),
+    ("gmid.gm_jd_at", 5),
+    ("gmid.gds_jd_at", 5),
+    ("gmid.gain_jd_at", 4),
+    ("gmid.ft_jd_at", 4),
 ];
 
-/// Index of the first function taking VDS as its last argument (see [`FUNCTIONS`]).
+/// Offset of the `_at` rows within a family (see [`FUNCTIONS`]).
 pub const AT: usize = 7;
 
 /// Index of `gmid.l(dev, l)`: the nearest length the device's table covers, so a design asks
 /// for an L and gets what the PDK can do (ASAP7 gates are fixed: its table has one L).
 pub const CLAMP_L: usize = 14;
 
+/// Index of the first Id/W-keyed function, `gmid.vgs_jd` (see [`FUNCTIONS`]).
+pub const JD: usize = 15;
+
 /// `fn_id = index + FN_STRIDE × generation`: the generation moves whenever the loaded tables
 /// change, so the re-declared `functions` set differs and the host recomposes and re-evaluates
 /// (identical re-declarations are ignored, plugin-abi §9).
-pub const FN_STRIDE: u32 = 16;
+pub const FN_STRIDE: u32 = 32;
 
 /// The `contribute functions` body for table generation `generation`.
 pub fn functions_text(generation: u32) -> String {
@@ -103,13 +128,14 @@ impl Tables {
 }
 
 /// Evaluates function `fn_id` (see [`FUNCTIONS`]) on line-record `args`, e.g.
-/// `"nfet_01v8" 15 5e-7 2e-5` (`gmid.w`) or `"nfet_01v8" 15 5e-7 2e-5 1.2` (`gmid.w_at`).
-/// Pure: reads only `tables`.
+/// `"nfet_01v8" 15 5e-7 2e-5` (`gmid.w`), `"nfet_01v8" 15 5e-7 2e-5 1.2` (`gmid.w_at`) or
+/// `"nfet_01v8" 2.6 5e-7 2e-5` (`gmid.w_jd`). Pure: reads only `tables`.
 ///
 /// # Errors
 ///
 /// `E_RANGE` for an unknown function, wrong arity or argument type, an unknown device, L or
-/// VDS outside the table, an unreachable gm/Id, a non-positive Id, or a non-finite result.
+/// VDS outside the table, an unreachable gm/Id or Id/W, a non-positive Id, or a non-finite
+/// result.
 pub fn eval(tables: &Tables, fn_id: u32, args: &str) -> Result<f64, Code> {
     let f = (fn_id % FN_STRIDE) as usize;
     let &(_, arity) = FUNCTIONS.get(f).ok_or(Code::Range)?;
@@ -126,12 +152,16 @@ pub fn eval(tables: &Tables, fn_id: u32, args: &str) -> Result<f64, Code> {
             Err(Code::Range)
         };
     }
-    let at_vds = (AT..CLAMP_L).contains(&f);
+    let by_jd = f >= JD;
+    // Row within the family: 0..AT plain, AT..2·AT with VDS.
+    let k = if by_jd { f - JD } else { f };
+    debug_assert!(k < 2 * AT);
+    let at_vds = k >= AT;
     let sized = arity - u8::from(at_vds) == 4;
     let mut v = text::values(args);
     let dev = v.need().map_err(|_| Code::Range)?;
     let mut num = || -> Result<f64, Code> { v.need_num::<f64>().map_err(|_| Code::Range) };
-    let (gm_id, l) = (num()?, num()?);
+    let (key, l) = (num()?, num()?);
     let id = if sized { num()? } else { 1.0 };
     let vds = if at_vds { Some(num()?) } else { None };
     v.end().map_err(|_| Code::Range)?;
@@ -139,18 +169,21 @@ pub fn eval(tables: &Tables, fn_id: u32, args: &str) -> Result<f64, Code> {
         return Err(Code::Range);
     }
     let lut = tables.get(&dev).ok_or(Code::Range)?;
-    let p = match vds {
-        Some(vds) => lut.point_at(gm_id, l, vds),
-        None => lut.point(gm_id, l),
+    let vds = vds.unwrap_or(lut.vds_nom);
+    let p = if by_jd {
+        lut.point_jd_at(key, l, vds)
+    } else {
+        lut.point_at(key, l, vds)
     }
     .map_err(|_| Code::Range)?;
     let gain = p.gm_w / p.gds_w;
-    let x = match f % AT {
+    let x = match k % AT {
         0 => p.vgs,
+        1 if by_jd => p.gm_id,
         1 => p.jd,
         2 => id / p.jd,
-        3 => gm_id * id,
-        4 => gm_id * id / gain,
+        3 => p.gm_id * id,
+        4 => p.gm_id * id / gain,
         5 => gain,
         6 => p.gm_w / (2.0 * std::f64::consts::PI * p.cgg_w),
         _ => unreachable!("AT is 7"),
@@ -204,6 +237,8 @@ mod guest_glue {
         /// ESPice's raw file of a device.
         Raw(String),
         Save(String),
+        /// A failed simulator's output, written to this path.
+        Output(String),
     }
 
     #[derive(Default)]
@@ -343,13 +378,14 @@ mod guest_glue {
                 issue(s, out, h, Io::Spawn(name));
             }
             Io::Spawn(name) if status != 0 => {
-                let tail = &bytes[bytes.len().saturating_sub(300)..];
-                let tail = String::from_utf8_lossy(tail);
+                // The output can quote kit model files: to a project file, not the log.
                 let sim = sweep_of(s, &name).map_or("simulator", |sw| sw.sim.program());
+                let path = chars::log_path(&name);
                 out.log_at(
                     Level::Error,
-                    &format!("gmid: {name}: {sim} exited {status}: {tail}"),
+                    &format!("gmid: {name}: {sim} exited {status}; its output is in {path}"),
                 );
+                issue(s, out, host.fs_write(&path, bytes), Io::Output(path));
             }
             Io::Spawn(name) if sweep_of(s, &name).is_some_and(|sw| sw.sim == Sim::Espice) => {
                 issue(s, out, host.fs_read(&chars::raw_path(&name)), Io::Raw(name));
@@ -410,6 +446,10 @@ mod guest_glue {
                 out.log_at(Level::Error, &format!("gmid: {name}: cannot write the LUT"));
             }
             Io::Save(name) => out.log(&format!("gmid: {name}: LUT saved")),
+            Io::Output(path) if status < 0 => {
+                out.log_at(Level::Warn, &format!("gmid: cannot write {path}"));
+            }
+            Io::Output(_) => {}
         }
     }
 
@@ -728,14 +768,92 @@ mod tests {
         }
     }
 
+    /// The two flows on the committed sky130 tables: for every L row (and the geometric midpoints
+    /// between rows) and gm/Id across each row's reachable range, gm/Id → Id/W → gm/Id returns
+    /// the start and the same VGS, and `gmid.w_jd` at that Id/W equals `gmid.w`. On a grid
+    /// length exactly (1e-9); between rows the two flows blend different row points: measured
+    /// worst 2.6 % in gm/Id (1.6 mV) for the nfet, near its weak-inversion peak where gm/Id
+    /// hardly moves with Id/W, and 6 % (6.4 mV) for the pfet across its short-L dip. Inside
+    /// that dip the Id/W lookup still answers (Id/W is monotone in VGS), with a gm/Id the gm/Id
+    /// lookup places past the dip instead.
+    #[test]
+    fn sky130_flows_agree() {
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/schemify/ota/gmid/"
+        );
+        let mut t = Tables::default();
+        for dev in ["nfet_01v8", "pfet_01v8"] {
+            let bytes = std::fs::read(format!("{dir}{dev}.glut")).unwrap();
+            t.insert(dev, Lut::decode(&bytes).unwrap()).unwrap();
+        }
+        for (dev, off_tol, off_mv) in [("nfet_01v8", 0.03, 2e-3), ("pfet_01v8", 0.07, 7e-3)] {
+            let lut = t.get(dev).unwrap().clone();
+            let (mut on_worst, mut off_worst) = (0.0f64, 0.0f64);
+            for (li, &l) in lut.l.iter().enumerate() {
+                let (lo, hi) = lut.gm_id_range(li);
+                let mid = lut.l.get(li + 1).map(|&n| (l * n).sqrt());
+                let cases = [
+                    (Some(l), 1e-9, 1e-9, &mut on_worst),
+                    (mid, off_tol, off_mv, &mut off_worst),
+                ];
+                for (l, tol, mv, worst) in cases {
+                    let Some(l) = l else { continue };
+                    for k in 1..20 {
+                        let g = lo + (hi - lo) * f64::from(k) / 20.0;
+                        let q = |f: &str, key: f64| call(&t, f, &format!("\"{dev}\" {key} {l}"));
+                        // Off the grid `g` may be out of one row's range.
+                        let Ok(jd) = q("gmid.jd", g) else { continue };
+                        let back = q("gmid.gm_id_jd", jd).unwrap();
+                        *worst = worst.max(rel(back, g));
+                        assert!(rel(back, g) < tol, "{dev} l={l} g={g}: {back}");
+                        let (v, v_jd) = (q("gmid.vgs", g).unwrap(), q("gmid.vgs_jd", jd).unwrap());
+                        assert!(
+                            (v - v_jd).abs() < mv,
+                            "{dev} l={l} g={g}: VGS {v} vs {v_jd}"
+                        );
+                        let w = |f: &str, key: f64| {
+                            call(&t, f, &format!("\"{dev}\" {key} {l} 2e-5")).unwrap()
+                        };
+                        assert!(rel(w("gmid.w_jd", jd), w("gmid.w", g)) < 1e-12, "{dev} W");
+                    }
+                }
+            }
+            eprintln!(
+                "{dev} gm/Id → Id/W → gm/Id: worst {on_worst:.1e} on the L grid, {off_worst:.1e} off it"
+            );
+        }
+        // The pfet at L 0.15 µm: gm/Id peaks locally at ≈ 15 in moderate inversion, dips, and
+        // rises again in weak inversion. Every Id/W between the strong and weak sides answers,
+        // VGS falling as Id/W falls; the gm/Id read inside the dip is below the local peak.
+        let p0 = t.get("pfet_01v8").unwrap().l[0];
+        let at = |f: &str, key: f64| call(&t, f, &format!("\"pfet_01v8\" {key} {p0}")).unwrap();
+        let (j_strong, j_weak) = (at("gmid.jd", 12.0), at("gmid.jd", 20.0));
+        let js: Vec<f64> = (0..=40)
+            .map(|k| j_strong * (j_weak / j_strong).powf(f64::from(k) / 40.0))
+            .collect();
+        for w in js.windows(2) {
+            assert!(
+                at("gmid.vgs_jd", w[1]) < at("gmid.vgs_jd", w[0]),
+                "VGS falls with Id/W"
+            );
+        }
+        let dip_low = js
+            .iter()
+            .map(|&j| at("gmid.gm_id_jd", j))
+            .fold(f64::MAX, f64::min);
+        assert!(dip_low < 15.0, "a gm/Id inside the dip: {dip_low}");
+    }
+
     #[test]
     fn registry_text() {
         assert_eq!(
             functions_text(0).lines().next(),
             Some("function gmid.vgs 0 3")
         );
-        assert!(functions_text(2).contains("function gmid.ft 38 3\n"));
-        assert!(functions_text(2).contains("function gmid.w_at 41 5\n"));
+        assert!(functions_text(2).contains("function gmid.ft 70 3\n"));
+        assert!(functions_text(2).contains("function gmid.w_at 73 5\n"));
+        assert!(functions_text(2).contains("function gmid.gm_id_jd 80 3\n"));
         assert_eq!(functions_text(0).lines().count(), FUNCTIONS.len());
         for (k, (name, arity)) in FUNCTIONS[AT..CLAMP_L].iter().enumerate() {
             assert_eq!(*name, format!("{}_at", FUNCTIONS[k].0));
@@ -745,6 +863,134 @@ mod tests {
                 "{name}: one more argument (VDS)"
             );
         }
+        // The Id/W family: the same rows in the same order, `_jd` before `_at`, the key swapped
+        // in row 1 (`gmid.jd` answers Id/W, `gmid.gm_id_jd` gm/Id).
+        assert_eq!(FUNCTIONS.len(), JD + 2 * AT);
+        for k in 0..2 * AT {
+            let (gm_name, gm_arity) = FUNCTIONS[k];
+            let (name, arity) = FUNCTIONS[JD + k];
+            let base = gm_name.strip_suffix("_at").unwrap_or(gm_name);
+            let base = if k % AT == 1 { "gmid.gm_id" } else { base };
+            let at = if k >= AT { "_at" } else { "" };
+            assert_eq!(name, format!("{base}_jd{at}"));
+            assert_eq!(arity, gm_arity, "{name}");
+        }
         assert!(FUNCTIONS.len() as u32 <= FN_STRIDE);
+    }
+
+    /// Every gm/Id-keyed function and its Id/W twin name each other's operating point: for
+    /// (L, gm/Id) on and off the L grid and VDS on and off nominal, `jd = gmid.jd(g, l)` gives
+    /// `gmid.gm_id_jd(jd, l) = g` and every other quantity of the twin equals the original. On
+    /// a grid length both walk one curve, so the round trip is exact to rounding (1e-9); off
+    /// it the two blend different row points, within 0.2 % on this model.
+    #[test]
+    fn jd_functions_invert_the_gm_id_functions() {
+        let (_, t) = tables();
+        let ls = t.luts[0].l.clone();
+        let mut off: Vec<f64> = ls.windows(2).map(|w| (w[0] * w[1]).sqrt()).collect();
+        off.extend(ls.windows(2).map(|w| 0.8 * w[0] + 0.2 * w[1]));
+        let (mut on_worst, mut off_worst) = (0.0f64, 0.0f64);
+        for (lengths, tol, worst) in [(&ls, 1e-9, &mut on_worst), (&off, 2e-3, &mut off_worst)] {
+            for &l in lengths {
+                for g in [3.0, 6.0, 10.0, 15.0, 20.0, 25.0, 28.0] {
+                    for vds in ["", " 0.3", " 0.9", " 1.35"] {
+                        let at = if vds.is_empty() { "" } else { "_at" };
+                        let q = |f: &str, key: f64, sized: &str| {
+                            let args = format!("\"nsynth\" {key} {l}{sized}{vds}");
+                            call(&t, &format!("gmid.{f}{at}"), &args).unwrap()
+                        };
+                        let jd = q("jd", g, "");
+                        let back = q("gm_id_jd", jd, "");
+                        *worst = worst.max(rel(back, g));
+                        assert!(rel(back, g) < tol, "l={l} g={g}{vds}: {back}");
+                        for (f, sized) in [
+                            ("vgs", ""),
+                            ("w", " 2e-5"),
+                            ("gm", " 2e-5"),
+                            ("gds", " 2e-5"),
+                            ("gain", ""),
+                            ("ft", ""),
+                        ] {
+                            let (a, b) = (q(f, g, sized), q(&format!("{f}_jd"), jd, sized));
+                            *worst = worst.max(rel(b, a));
+                            assert!(rel(b, a) < tol, "{f} l={l} g={g}{vds}: {b} vs {a}");
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "gm/Id → Id/W → gm/Id: worst {on_worst:.1e} on the L grid, {off_worst:.1e} off it"
+        );
+    }
+
+    /// Id/W-keyed answers vs the analytic model solved exactly: for VGS from deep weak to strong
+    /// inversion (Id/W over seven decades, including the flat gm/Id region where a gm/Id key
+    /// cannot place the device), at grid and off-grid L: gm/Id, gain and ft within 2 %, VGS
+    /// within 2 mV.
+    #[test]
+    fn jd_lookup_matches_the_analytic_model() {
+        let (m, t) = tables();
+        let ls = &t.luts[0].l;
+        let mut lengths: Vec<f64> = ls.clone();
+        lengths.extend(ls.windows(2).map(|w| (w[0] * w[1]).sqrt()));
+        let mut worst = 0.0f64;
+        for &l in &lengths {
+            for k in 0..=26 {
+                let vgs = 0.15 + 0.05 * f64::from(k);
+                let q = m.quantities(vgs, 0.9, l);
+                let args = format!("\"nsynth\" {} {l}", q[0]);
+                let (gain, ft) = (q[1] / q[2], q[1] / (2.0 * std::f64::consts::PI * q[3]));
+                let got_vgs = call(&t, "gmid.vgs_jd", &args).unwrap();
+                assert!((got_vgs - vgs).abs() < 2e-3, "vgs l={l} {vgs}: {got_vgs}");
+                for (f, want) in [
+                    ("gmid.gm_id_jd", q[1] / q[0]),
+                    ("gmid.gain_jd", gain),
+                    ("gmid.ft_jd", ft),
+                ] {
+                    let got = call(&t, f, &args).unwrap();
+                    worst = worst.max(rel(got, want));
+                    assert!(
+                        rel(got, want) < 0.02,
+                        "{f} l={l} vgs={vgs}: {got} vs {want}"
+                    );
+                }
+                let w = call(&t, "gmid.w_jd", &format!("{args} 2e-5")).unwrap();
+                assert!(rel(w, 2e-5 / q[0]) < 1e-12, "W = Id / (Id/W) exactly");
+            }
+        }
+        assert!(worst < 0.02, "worst relative error {worst}");
+        eprintln!("worst relative error of the Id/W lookup vs the analytic model: {worst:.5}");
+    }
+
+    #[test]
+    fn bad_jd_calls_are_range_errors() {
+        let (_, t) = tables();
+        for (f, args) in [
+            ("gmid.gm_id_jd", "\"nope\" 1 1e-6"),
+            ("gmid.gm_id_jd", "\"nsynth\" 1 1e-9"),
+            ("gmid.gm_id_jd", "\"nsynth\" 1 1e-3"),
+            ("gmid.gm_id_jd", "\"nsynth\" 1e5 1e-6"),
+            ("gmid.gm_id_jd", "\"nsynth\" 1e-12 1e-6"),
+            ("gmid.gm_id_jd", "\"nsynth\" 0 1e-6"),
+            ("gmid.gm_id_jd", "\"nsynth\" -1 1e-6"),
+            ("gmid.gm_id_jd", "\"nsynth\" nan 1e-6"),
+            ("gmid.gm_id_jd", "\"nsynth\" 1u 1e-6"),
+            ("gmid.gm_id_jd", "\"nsynth\" 1"),
+            ("gmid.gm_id_jd", "\"nsynth\" 1 1e-6 2e-5"),
+            ("gmid.w_jd", "\"nsynth\" 1 1e-6"),
+            ("gmid.w_jd", "\"nsynth\" 1 1e-6 0"),
+            ("gmid.w_jd", "\"nsynth\" 1 1e-6 -2e-5"),
+            ("gmid.gm_id_jd_at", "\"nsynth\" 1 1e-6"),
+            ("gmid.gm_id_jd_at", "\"nsynth\" 1 1e-6 1.9"),
+            ("gmid.gm_id_jd_at", "\"nsynth\" 1 1e-6 0.1"),
+            ("gmid.w_jd_at", "\"nsynth\" 1 1e-6 2e-5"),
+        ] {
+            assert_eq!(call(&t, f, args), Err(Code::Range), "{f}({args})");
+        }
+        assert!(call(&t, "gmid.gm_id_jd", "\"nsynth\" 1 1e-6").is_ok());
+        for free in JD as u32 + 2 * AT as u32..FN_STRIDE {
+            assert_eq!(eval(&t, free, "\"nsynth\" 1 1e-6"), Err(Code::Range));
+        }
     }
 }

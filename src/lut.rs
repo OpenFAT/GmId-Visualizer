@@ -1,9 +1,12 @@
 //! gm/Id lookup tables: per-width device quantities on an (L, VDS, VGS) grid, their `.glut`
-//! v2 binary form, and the one query every exported function is built on ([`Lut::point_at`]).
+//! v2 binary form, and the one query every exported function is built on ([`Lut::point_at`],
+//! keyed by gm/Id, and its inverse [`Lut::point_jd_at`], keyed by Id/W).
 //!
 //! Data design:
 //! 1. In: `.glut` bytes or a characterization grid. Out: [`Lut`] (SoA), then one [`Point`] per
 //!    query (gm/Id, L, VDS).
+//!    The query is keyed by gm/Id ([`Lut::point_at`]) or by Id/W ([`Lut::point_jd_at`]); both
+//!    walk the same interpolated curve, so one is the inverse of the other.
 //! 2. How many: a few devices per project ([`DEVICES_MAX`]); ≤ [`CELLS_MAX`] grid cells each.
 //! 3. Widths: axes `f64` (they are compared against user values), cells `f32` (7 significant
 //!    digits is beyond any model's accuracy and halves the file), axis lengths `u16` in the file
@@ -73,11 +76,14 @@ pub struct Lut {
     pub cgg_w: Vec<f32>,
 }
 
-/// A device's small-signal operating point at one (gm/Id, L), per metre of width.
+/// A device's small-signal operating point at one (gm/Id, L) or (Id/W, L), per metre of width.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point {
     /// |VGS| (V).
     pub vgs: f64,
+    /// gm/Id (1/V): the key of a gm/Id query; for an Id/W query, read off the same curve the
+    /// gm/Id query walks (so `point(p.gm_id, l)` gives this point back on a grid length).
+    pub gm_id: f64,
     /// Drain current density |Id|/W (A/m).
     pub jd: f64,
     /// gm/W (S/m).
@@ -98,6 +104,18 @@ pub enum Miss {
     GmId,
     /// VDS is not finite or outside the table's VDS axis (no extrapolation).
     Vds,
+    /// Id/W is not finite or not reachable at that L: above the value at the highest VGS, or
+    /// below where the current stops falling with VGS (cutoff, or leakage that rises again).
+    Jd,
+}
+
+/// Which quantity a query fixes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Key {
+    /// gm/Id (1/V).
+    GmId,
+    /// Id/W (A/m).
+    Jd,
 }
 
 impl Lut {
@@ -186,9 +204,54 @@ impl Lut {
     ///
     /// Cost: O(VGS points) for each of ≤ 2 L rows.
     pub fn point_at(&self, gm_id: f64, l: f64, vds: f64) -> Result<Point, Miss> {
+        self.lookup(Key::GmId, gm_id, l, vds)
+    }
+
+    /// The operating point where Id/W equals `jd` (A/m) at length `l` (m), at the nominal VDS;
+    /// [`Lut::point_jd_at`] with that VDS.
+    ///
+    /// # Errors
+    ///
+    /// As [`Lut::point_jd_at`]; never [`Miss::Vds`] on a checked table.
+    pub fn point_jd(&self, jd: f64, l: f64) -> Result<Point, Miss> {
+        self.point_jd_at(jd, l, self.vds_nom)
+    }
+
+    /// The operating point where Id/W equals `jd` (A/m) at length `l` (m) and |VDS| `vds` (V):
+    /// the inverse of [`Lut::point_at`].
+    ///
+    /// Same steps as [`Lut::point_at`] with Id/W as the key: VGS is found by scanning down from
+    /// the highest VGS to the first VGS where Id/W falls to `jd`. Id/W falls monotonically with
+    /// VGS, so there is no dip to cross and every Id/W in range has one answer; the usable
+    /// branch ends where the current stops falling (cutoff, or terminal leakage rising again in
+    /// deep subthreshold). Inside the bracketing VGS cell the fraction is solved in log Id/W
+    /// (the cell's current is interpolated geometrically), which puts the point on the curve
+    /// the gm/Id query walks, gm/Id included. Between L rows each row is looked up at
+    /// `jd·l/l_row` (Id/W ∝ 1/L at fixed gm/Id, the power law the gm/Id blend is exact for),
+    /// then the two points are blended as there, gm/Id geometrically; on a device that obeys
+    /// the power law both rows give the same gm/Id and the round trip through
+    /// [`Lut::point_at`] is exact.
+    ///
+    /// # Errors
+    ///
+    /// [`Miss::L`] and [`Miss::Vds`] as [`Lut::point_at`]; [`Miss::Jd`] when `jd` is not
+    /// reachable at that L.
+    ///
+    /// Cost: O(VGS points) for each of ≤ 2 L rows.
+    pub fn point_jd_at(&self, jd: f64, l: f64, vds: f64) -> Result<Point, Miss> {
+        self.lookup(Key::Jd, jd, l, vds)
+    }
+
+    /// [`Lut::point_at`] or [`Lut::point_jd_at`]: the point where `key` equals `x`. The key
+    /// field of the answer is `x` itself, so the sized functions use the caller's value bit
+    /// for bit.
+    fn lookup(&self, key: Key, x: f64, l: f64, vds: f64) -> Result<Point, Miss> {
         debug_assert!(self.id_w.len() == self.cells() && self.cgg_w.len() == self.cells());
-        if !(gm_id.is_finite() && gm_id > 0.0) {
-            return Err(Miss::GmId);
+        if !(x.is_finite() && x > 0.0) {
+            return Err(match key {
+                Key::GmId => Miss::GmId,
+                Key::Jd => Miss::Jd,
+            });
         }
         if !(l.is_finite() && l > 0.0) {
             return Err(Miss::L);
@@ -199,25 +262,39 @@ impl Lut {
             return Err(Miss::L);
         }
         let l = l.clamp(first, last);
-        let i1 = self.l.partition_point(|&x| x < l);
+        let i1 = self.l.partition_point(|&v| v < l);
+        // Off the grid an Id/W key is carried to each row as `x·l/l_row`: at fixed gm/Id
+        // Id/W ∝ 1/L, the power law the blend below is exact for, so on such a device both
+        // rows land on the same gm/Id and the blend gives `x` back.
+        let row = |li: usize, scaled: bool| match key {
+            Key::GmId => self.row_point(li, x, d),
+            Key::Jd if scaled => self.row_point_jd(li, x * l / self.l[li], d),
+            Key::Jd => self.row_point_jd(li, x, d),
+        };
         // On a grid length (within rounding) the row answers alone.
-        if i1 == 0 || 1.0 - l / self.l[i1] < 1e-9 {
-            return self.row_point(i1, gm_id, d);
+        let mut p = if i1 == 0 || 1.0 - l / self.l[i1] < 1e-9 {
+            row(i1, false)?
+        } else if l / self.l[i1 - 1] - 1.0 < 1e-9 {
+            row(i1 - 1, false)?
+        } else {
+            let i0 = i1 - 1;
+            let (p0, p1) = (row(i0, true)?, row(i1, true)?);
+            let t = (l / self.l[i0]).ln() / (self.l[i1] / self.l[i0]).ln();
+            debug_assert!((0.0..=1.0).contains(&t));
+            Point {
+                vgs: lerp(p0.vgs, p1.vgs, t),
+                gm_id: geo(p0.gm_id, p1.gm_id, t),
+                jd: geo(p0.jd, p1.jd, t),
+                gm_w: geo(p0.gm_w, p1.gm_w, t),
+                gds_w: geo(p0.gds_w, p1.gds_w, t),
+                cgg_w: geo(p0.cgg_w, p1.cgg_w, t),
+            }
+        };
+        match key {
+            Key::GmId => p.gm_id = x,
+            Key::Jd => p.jd = x,
         }
-        let i0 = i1 - 1;
-        if l / self.l[i0] - 1.0 < 1e-9 {
-            return self.row_point(i0, gm_id, d);
-        }
-        let (p0, p1) = (self.row_point(i0, gm_id, d)?, self.row_point(i1, gm_id, d)?);
-        let t = (l / self.l[i0]).ln() / (self.l[i1] / self.l[i0]).ln();
-        debug_assert!((0.0..=1.0).contains(&t));
-        Ok(Point {
-            vgs: lerp(p0.vgs, p1.vgs, t),
-            jd: geo(p0.jd, p1.jd, t),
-            gm_w: geo(p0.gm_w, p1.gm_w, t),
-            gds_w: geo(p0.gds_w, p1.gds_w, t),
-            cgg_w: geo(p0.cgg_w, p1.cgg_w, t),
-        })
+        Ok(p)
     }
 
     /// VDS rows bracketing `vds` and the blend factor between them.
@@ -277,17 +354,51 @@ impl Lut {
                 } else {
                     0.0
                 };
-                return Ok(Point {
-                    vgs: lerp(self.vgs[g + 1], self.vgs[g], t),
-                    jd: geo(hi[0], lo[0], t),
-                    gm_w: geo(hi[1], lo[1], t),
-                    gds_w: geo(hi[2], lo[2], t),
-                    cgg_w: geo(hi[3], lo[3], t),
-                });
+                return Ok(self.cell_point(g, &hi, &lo, t));
             }
             (hi, hi_v) = (lo, lo_v);
         }
         Err(Miss::GmId)
+    }
+
+    /// [`Lut::point_jd_at`] for one L row and VDS bracket `d`.
+    fn row_point_jd(&self, li: usize, target: f64, d: (usize, usize, f64)) -> Result<Point, Miss> {
+        let ng = self.vgs.len();
+        assert!(li < self.l.len() && ng >= 2);
+        // Scan from the strong-inversion end down while Id/W keeps falling; every value passed
+        // is above `target`, so the first one at or below it brackets the answer.
+        let mut hi = self.quantities(li, d, ng - 1);
+        if gm_id_of(&hi) <= 0.0 || target > hi[0] {
+            return Err(Miss::Jd);
+        }
+        for g in (0..ng - 1).rev() {
+            let lo = self.quantities(li, d, g);
+            if gm_id_of(&lo) <= 0.0 || lo[0] >= hi[0] {
+                break;
+            }
+            if target >= lo[0] {
+                // Inverts `jd = geo(hi, lo, t)`; 0 ≤ t ≤ 1 because lo < target ≤ hi.
+                let t = (target / hi[0]).ln() / (lo[0] / hi[0]).ln();
+                return Ok(self.cell_point(g, &hi, &lo, t));
+            }
+            hi = lo;
+        }
+        Err(Miss::Jd)
+    }
+
+    /// The point a fraction `t` of the way from VGS point `g + 1` (`hi`) down to `g` (`lo`):
+    /// VGS and gm/Id linear in `t`, the per-width quantities geometric. Both lookups walk this
+    /// curve, which is what makes them inverses.
+    fn cell_point(&self, g: usize, hi: &[f64; 4], lo: &[f64; 4], t: f64) -> Point {
+        debug_assert!((0.0..=1.0).contains(&t));
+        Point {
+            vgs: lerp(self.vgs[g + 1], self.vgs[g], t),
+            gm_id: lerp(gm_id_of(hi), gm_id_of(lo), t),
+            jd: geo(hi[0], lo[0], t),
+            gm_w: geo(hi[1], lo[1], t),
+            gds_w: geo(hi[2], lo[2], t),
+            cgg_w: geo(hi[3], lo[3], t),
+        }
     }
 
     /// The gm/Id interval [`Lut::point`] answers at L row `li`: from the value at the highest
@@ -612,6 +723,116 @@ mod tests {
         let ts: Vec<f64> = (0..=100).map(|k| 2.0 + 0.1 * f64::from(k)).collect();
         for w in ts.windows(2) {
             assert!(vgs(w[1]).unwrap() <= vgs(w[0]).unwrap(), "{w:?}");
+        }
+    }
+
+    /// One-row table on VGS 0 … 1 V in 0.1 V with the given Id/W and gm/Id per VGS point.
+    fn row_lut(id_w: &[f32], gm_id: &[f32]) -> Lut {
+        let n = id_w.len();
+        assert_eq!(gm_id.len(), n);
+        Lut {
+            name: "row".into(),
+            polarity: Polarity::N,
+            vdd: 1.0,
+            vds_nom: 0.5,
+            provenance: String::new(),
+            l: vec![1e-6],
+            vds: vec![0.5],
+            vgs: (0..n).map(|k| 0.1 * k as f64).collect(),
+            id_w: id_w.to_vec(),
+            gm_w: id_w.iter().zip(gm_id).map(|(i, g)| i * g).collect(),
+            gds_w: vec![1.0; n],
+            cgg_w: vec![1.0; n],
+        }
+    }
+
+    /// Id/W keys on a row whose gm/Id dips (as in [`a_dip_in_gm_id_is_crossed`]): every Id/W
+    /// from the bottom of the branch to the top answers once, inside the dip too, and a gm/Id
+    /// answer outside the dip maps back to the same point. Id/W is interpolated in log space,
+    /// so a decade cell halves at √10.
+    #[test]
+    fn jd_keys_answer_once_across_a_gm_id_dip() {
+        let profile = [9.0f32, 10.0, 11.0, 12.0, 9.0, 6.0, 7.0, 8.0, 6.0, 4.0, 2.0];
+        let id: Vec<f32> = (0..11).map(|k| 10f32.powi(k - 10)).collect();
+        let lut = row_lut(&id, &profile);
+        assert_eq!(lut.check(), Ok(()));
+        let p = lut.point_jd(10f64.powf(-4.5), 1e-6).unwrap();
+        assert!(
+            (p.vgs - 0.55).abs() < 1e-6,
+            "half way in log Id/W (f32 cells): {}",
+            p.vgs
+        );
+        assert!(
+            (p.gm_id - 6.5).abs() < 1e-6,
+            "gm/Id inside the dip: {}",
+            p.gm_id
+        );
+        for g in [3.0, 5.0, 7.5, 8.0, 10.0, 11.5] {
+            let fwd = lut.point(g, 1e-6).unwrap();
+            let back = lut.point_jd(fwd.jd, 1e-6).unwrap();
+            assert!((back.gm_id - g).abs() < 1e-9 * g, "{g}: {}", back.gm_id);
+            assert!((back.vgs - fwd.vgs).abs() < 1e-12, "{g}");
+        }
+        assert_eq!(
+            lut.point_jd(1.0, 1e-6).map(|p| p.vgs),
+            Ok(1.0),
+            "top of the axis"
+        );
+        let bottom = f64::from(id[0]);
+        assert_eq!(lut.point_jd(bottom, 1e-6).map(|p| p.vgs), Ok(0.0), "bottom");
+        assert_eq!(lut.point_jd(1.01, 1e-6), Err(Miss::Jd), "above the top");
+        assert_eq!(
+            lut.point_jd(0.99 * bottom, 1e-6),
+            Err(Miss::Jd),
+            "below the bottom"
+        );
+    }
+
+    /// Where the current stops falling with VGS (terminal leakage rising again in deep
+    /// subthreshold, as an ESPice LUT can show) the usable branch ends: an Id/W below the
+    /// turn is not reachable, even though the leaky tail repeats values above it.
+    #[test]
+    fn jd_branch_ends_where_the_current_turns() {
+        let id = [
+            3e-9f32, 2e-9, 1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1,
+        ];
+        let lut = row_lut(&id, &[20.0; 11]);
+        assert!(lut.point_jd(1e-8, 1e-6).is_ok());
+        let turn = f64::from(id[2]);
+        assert_eq!(
+            lut.point_jd(turn, 1e-6).map(|p| p.vgs),
+            Ok(0.2),
+            "the turn itself"
+        );
+        assert_eq!(
+            lut.point_jd(0.5 * turn, 1e-6),
+            Err(Miss::Jd),
+            "below the turn"
+        );
+        // Repeated by the tail (2e-9 at 0.1 V) but answered on the branch, between 0.2 and 0.3 V.
+        let v = lut.point_jd(f64::from(id[1]), 1e-6).unwrap().vgs;
+        assert!(v > 0.2 && v < 0.3, "{v}");
+        // A constant current (no slope) has no branch below the top.
+        let flat = row_lut(&[1.0; 11], &[5.0; 11]);
+        assert_eq!(flat.point_jd(0.5, 1e-6), Err(Miss::Jd));
+    }
+
+    #[test]
+    fn out_of_range_jd_queries_miss() {
+        let lut = synth::lut(&Ekv::default(), "nsynth");
+        let (lo, hi) = (lut.l[0], lut.l[lut.l.len() - 1]);
+        assert_eq!(lut.point_jd(1.0, lo * 0.9), Err(Miss::L));
+        assert_eq!(lut.point_jd(1.0, hi * 1.1), Err(Miss::L));
+        assert_eq!(lut.point_jd(1.0, f64::NAN), Err(Miss::L));
+        assert_eq!(lut.point_jd_at(1.0, lo, 1.9), Err(Miss::Vds));
+        for jd in [0.0, -1.0, f64::NAN, f64::INFINITY, 1e5, 1e-12] {
+            assert_eq!(lut.point_jd(jd, lo), Err(Miss::Jd), "{jd}");
+        }
+        assert!(lut.point_jd(1.0, lo * (1.0 + 1e-12)).is_ok(), "edge slack");
+        // The key comes back bit for bit, on and off the grid.
+        for l in [lo, (lut.l[0] * lut.l[1]).sqrt()] {
+            assert_eq!(lut.point_jd(2.6, l).unwrap().jd, 2.6);
+            assert_eq!(lut.point(15.0, l).unwrap().gm_id, 15.0);
         }
     }
 
