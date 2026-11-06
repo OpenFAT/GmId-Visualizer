@@ -316,8 +316,8 @@ dip. At gm/Id = 15, L = 0.5 µm the nfet has jd ≈ 2.6 A/m, gain ≈ 112 and ft
 `nix develop` gives the toolchain (Rust 1.95.0 with rust-lld from the rust-overlay rev Schemify builds with,
 ngspice, Xyce, the C++ toolchain). Schemify crates come in as git dependencies pinned to one
 Schemify commit (`rev` in `Cargo.toml`); for work against a local Schemify checkout, add
-`[patch."https://github.com/OpenFAT/Schemify"]` entries pointing at its `crates/abi` and
-`crates/plugin` in a `.cargo/config.toml` you do not commit.
+`[patch."https://github.com/OpenFAT/Schemify"]` entries pointing at its `crates/protocol/abi` and
+`crates/plugins/plugin` in a `.cargo/config.toml` you do not commit.
 
 - `./build.sh` builds `gmid_lut.wasm` for `wasm32-unknown-unknown` at the repository root
   (limit 200 KB, it is ≈ 177 KB), byte-reproducibly: host paths are remapped. Commit the module

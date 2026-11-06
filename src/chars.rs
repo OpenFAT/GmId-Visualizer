@@ -129,7 +129,7 @@ pub fn parse(src: &str) -> Result<Vec<Device>, String> {
             match text::body_line(line).map_err(|_| fail("malformed attribute line"))? {
                 BodyLine::Blank | BodyLine::Comment => {}
                 BodyLine::Verbatim(_) => return Err(fail("unexpected `|` line")),
-                BodyLine::Attr(key, vals) => a.set(key, vals).map_err(|e| fail(&e))?,
+                BodyLine::Attr { word, values } => a.set(word, values).map_err(|e| fail(&e))?,
             }
         }
         let lut = a
