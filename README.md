@@ -38,59 +38,146 @@ plugin gmid path plugins/gmid_lut.wasm
 
 ## Functions
 
-All arguments and results are SI. `dev` is a device name from `gmid.chars` (a string), `gm_id`
-is gm/Id in 1/V, `l` the channel length in metres, `id` the drain current in amperes, `vds` the
-drain-source voltage magnitude in volts.
+Two families on the same tables, one per sizing flow. All arguments and results are SI. `dev`
+is a device name from `gmid.chars` (a string), `gm_id` is gm/Id in 1/V, `jd` the current
+density |Id|/W in A/m (1 A/m = 1 µA/µm), `l` the channel length in metres, `id` the drain
+current in amperes, `vds` the drain-source voltage magnitude in volts.
 
-| Function | Arity | Result |
-|---|---|---|
-| `gmid.vgs(dev, gm_id, l)` | 3 | \|VGS\| (V) |
-| `gmid.jd(dev, gm_id, l)` | 3 | current density \|Id\|/W (A/m) |
-| `gmid.w(dev, gm_id, l, id)` | 4 | width W = id / jd (m) |
-| `gmid.gm(dev, gm_id, l, id)` | 4 | gm = gm_id · id (S), only where gm_id is reachable |
-| `gmid.gds(dev, gm_id, l, id)` | 4 | gds = gm / gain (S) |
-| `gmid.gain(dev, gm_id, l)` | 3 | intrinsic gain gm/gds (V/V) |
-| `gmid.ft(dev, gm_id, l)` | 3 | transit frequency gm / (2π·Cgg) (Hz) |
-| `gmid.<f>_at(…, vds)` | +1 | each of the above at \|VDS\| = `vds` instead of the nominal VDS |
-| `gmid.l(dev, l)` | 2 | `l` clamped into the device table's L range (m): the nearest length the PDK offers, e.g. ASAP7's one fixed 21 nm gate |
+| gm/Id-driven: pick gm/Id | Id/W-driven: pick Id/W | Arity | Result |
+|---|---|---|---|
+| `gmid.vgs(dev, gm_id, l)` | `gmid.vgs_jd(dev, jd, l)` | 3 | \|VGS\| (V) |
+| `gmid.jd(dev, gm_id, l)` | `gmid.gm_id_jd(dev, jd, l)` | 3 | the other key: Id/W (A/m), resp. gm/Id (1/V) |
+| `gmid.w(dev, gm_id, l, id)` | `gmid.w_jd(dev, jd, l, id)` | 4 | width W = id / jd (m) |
+| `gmid.gm(dev, gm_id, l, id)` | `gmid.gm_jd(dev, jd, l, id)` | 4 | gm = gm/Id · id (S) |
+| `gmid.gds(dev, gm_id, l, id)` | `gmid.gds_jd(dev, jd, l, id)` | 4 | gds = gm / gain (S) |
+| `gmid.gain(dev, gm_id, l)` | `gmid.gain_jd(dev, jd, l)` | 3 | intrinsic gain gm/gds (V/V) |
+| `gmid.ft(dev, gm_id, l)` | `gmid.ft_jd(dev, jd, l)` | 3 | transit frequency gm / (2π·Cgg) (Hz) |
+| `gmid.<f>_at(…, vds)` | `gmid.<f>_jd_at(…, vds)` | +1 | each of the above at \|VDS\| = `vds` instead of the nominal VDS |
+| `gmid.l(dev, l)` | | 2 | `l` clamped into the device table's L range (m): the nearest length the PDK offers, e.g. ASAP7's one fixed 21 nm gate |
 
-The `_at` variants (`gmid.vgs_at(dev, gm_id, l, vds)`, …, `gmid.w_at(dev, gm_id, l, id, vds)`)
+The `_at` variants (`gmid.vgs_at(dev, gm_id, l, vds)`, …, `gmid.w_jd_at(dev, jd, l, id, vds)`)
 take `vds` as their last argument; at the nominal VDS they return exactly what the plain
 function returns. `vds` must lie on the table's VDS axis (0.15 V … VDD for a default
 characterization).
 
 Registry records (`contribute functions`, plugin-abi §7): `function <name> <fn_id> <arity>` with
-`fn_id = index + 16 × generation`, index in the table order above (vgs 0 … ft 6, then vgs_at 7
-… ft_at 13, then l 14). The generation starts at 0 on `Load` and advances whenever the loaded tables
+`fn_id = index + 32 × generation`, index in the table order: vgs 0 … ft 6, vgs_at 7 … ft_at 13,
+l 14, then the Id/W family in the same row order, vgs_jd 15 … ft_jd 21, vgs_jd_at 22 …
+ft_jd_at 28. The generation starts at 0 on `Load` and advances whenever the loaded tables
 change (a LUT loads or a characterization finishes); the plugin then re-declares the set, so the
 host's registry epoch moves and it re-evaluates every expression that calls `gmid.*` (an
-identical re-declaration would be ignored). `schemify_call` reads `fn_id % 16`.
+identical re-declaration would be ignored). `schemify_call` reads `fn_id % 32` (16 before the
+Id/W family; fn_ids are never stored, docs pages call by name).
 
 Errors: every failure is `E_RANGE` (the host reports `X010`): unknown device or no table loaded
 for it, wrong arity or argument type, `l` outside the table's L axis (no extrapolation; a 1e-9
 relative slack absorbs `0.5u` vs `0.5e-6` rounding), `vds` outside the VDS axis (1 nV slack),
-`gm_id` not reachable, `id ≤ 0`, or a non-finite result. The functions never panic.
+`gm_id` or `jd` not reachable (below), `id ≤ 0`, or a non-finite result. The functions never
+panic, and an answer is only ever a number: no text from the tables, the deck or the kit.
+
+### Two flows, one table
+
+In both flows W is never chosen: it is the drain current over the current density the bias
+point has. Only the key differs:
+
+- **gm/Id-driven** (Jespers & Murmann's default): the specs fix gm/Id and L; the table gives
+  Id/W, so `W = id / gmid.jd(dev, gm_id, l)`, which is `gmid.w(dev, gm_id, l, id)`.
+- **Id/W-driven** (current-density sizing, e.g. ECE 636's: 0.1 A/m deep weak, 10 A/m deep
+  strong inversion): the designer fixes Id/W and L; `W = id / jd` directly, which is
+  `gmid.w_jd(dev, jd, l, id)`, and the table gives gm/Id, VGS, gain and ft at that density.
+  This is the flow that still works in weak inversion, where gm/Id flattens towards
+  1/(n·UT) and stops placing the device.
+
+Names: the Id/W family is the gm/Id family's names with `_jd` (the key) before the `_at` (the
+VDS argument), arguments in the same order with `jd` in `gm_id`'s place, so a page switches
+flow by renaming the call; the one exception is the key itself, `gmid.jd` ↔ `gmid.gm_id_jd`,
+which are each other's inverse. They stay under `gmid.`, the plugin's own namespace: a separate
+`idw.` would be one more namespace for composition (last wins) to collide on.
+
+`Vdsat` is not stored (no simulator reports it uniformly); `2 / gmid.gm_id_jd(dev, jd, l)` is
+the V* = 2·Id/gm the gm/Id literature uses in its place. The inversion coefficient
+IC = Id / (I_spec·W/L) is not offered: I_spec needs n and µCox, which the tables do not hold,
+and estimating them from the table is a model fit, not a lookup.
 
 ### Query semantics
 
-Every function evaluates one operating point at (gm_id, l), at `vds` for the `_at` variants and
-at the device's nominal VDS (VDD/2 by default, stored in the LUT) for the others:
+Every function evaluates one operating point at (gm_id, l) or (jd, l), at `vds` for the `_at`
+variants and at the device's nominal VDS (VDD/2 by default, stored in the LUT) for the others:
 
 1. the two VDS rows bracketing that VDS are blended linearly;
-2. VGS is found by inverse lookup of gm/Id along VGS, scanning down from the highest VGS (gm/Id
-   rises from strong towards weak inversion) to the first VGS where gm/Id reaches `gm_id`. A dip
-   on the way (a local maximum in moderate inversion, which sky130 pfet bins show) is crossed;
-   cutoff (no current) ends the row. Reachable targets therefore form `[gm/Id at VDD, the row's
-   highest gm/Id]` per L row, and VGS still falls as `gm_id` rises;
-3. inside the bracketing VGS cell, id, gm, gds and Cgg are interpolated geometrically (exact for
-   the exponential weak-inversion current);
-4. the two L rows bracketing `l` are blended in log L, quantities geometrically (exact for the
-   power laws jd ∝ 1/L, ft ∝ 1/L²), VGS linearly; a length on the grid uses that row alone.
+2. VGS is found by inverse lookup of the key along VGS, scanning down from the highest VGS:
+   - gm/Id rises from strong towards weak inversion; the scan stops at the first VGS where gm/Id
+     reaches `gm_id`. A dip on the way (a local maximum in moderate inversion, which sky130 pfet
+     bins show) is crossed; cutoff (no current) ends the row. Reachable targets therefore form
+     `[gm/Id at VDD, the row's highest gm/Id]` per L row, and VGS still falls as `gm_id` rises;
+   - Id/W falls monotonically with VGS, so every `jd` has one answer, inside a gm/Id dip too;
+     the usable branch ends at cutoff or where the current stops falling (terminal leakage
+     rising again in deep subthreshold, which an ESPice LUT can show). Reachable targets form
+     `[Id/W at the branch's end, Id/W at VDD]`: on the sky130 nfet at L 0.5 µm,
+     1.1e-7 … 211 A/m;
+3. inside the bracketing VGS cell, VGS and gm/Id are interpolated linearly and id, gm, gds and
+   Cgg geometrically (exact for the exponential weak-inversion current). Both keys solve for the
+   fraction on this one curve (gm/Id linearly, Id/W in log), so on a grid length each lookup is
+   the exact inverse of the other;
+4. the two L rows bracketing `l` are blended in log L, quantities and gm/Id geometrically
+   (exact for the power laws jd ∝ 1/L, ft ∝ 1/L²), VGS linearly; a length on the grid uses
+   that row alone. An Id/W key is carried to each row as `jd·l/l_row` first (jd ∝ 1/L at fixed
+   gm/Id), so on a device that obeys that power law both rows give the same gm/Id.
 
 Against a synthetic EKV device (closed-form gm, gds, Cgg; `src/synth.rs`) sampled on the
-characterization grid, every function agrees with the exact answer within 2 % (worst measured
-1.5 %, at off-grid L), VGS within 2 mV, at the nominal VDS and off it (id and gm are linear in
-VDS in that model, so the VDS blend adds no error beyond f32 storage).
+characterization grid, every gm/Id-keyed function agrees with the exact answer within 2 % (worst
+measured 1.5 %, at off-grid L), VGS within 2 mV, at the nominal VDS and off it (id and gm are
+linear in VDS in that model, so the VDS blend adds no error beyond f32 storage). The Id/W-keyed
+functions, from VGS 0.15 V (Id/W ≈ 8e-6 A/m at L 8 µm) to 1.45 V, agree within 0.12 %.
+
+Consistency of the two flows (gm/Id → `gmid.jd` → `gmid.gm_id_jd`, and every other quantity of
+the twin function, `tests` in `src/lib.rs`):
+
+| | on a grid length | between grid lengths |
+|---|---|---|
+| EKV oracle, VDS 0.3 … 1.35 V | 4e-16 | 3.2e-5 |
+| sky130 nfet, every row, gm/Id across its range | 1e-16 | 2.6 % in gm/Id, 1.6 mV in VGS (near the weak-inversion peak, where gm/Id hardly moves with Id/W) |
+| sky130 pfet | 1e-16 | 6 % in gm/Id, 6.4 mV in VGS (across the short-L dip) |
+
+`gmid.w_jd(dev, gmid.jd(dev, g, l), l, id)` equals `gmid.w(dev, g, l, id)` bit for bit
+everywhere. Between grid lengths the two flows blend two different row points, so they agree to
+the interpolation error rather than exactly; a design that needs them bit-identical picks L on
+the grid (the lengths in `gmid.chars`).
+
+### Example: a 5-transistor OTA input pair, sized both ways
+
+20 µA tail, so 10 µA per input device; L = 0.5 µm; sky130 nfet (the committed sample table).
+On the cell's docs page (docs-page.md §3), side by side:
+
+```
+# gm/Id-driven                                      # Id/W-driven
+var id_in 10u                                       var id_in 10u
+var L_in 0.5u                                       var L_in 0.5u
+var gm_id_in 15                                     var jd_in 2.576
+  unit 1/V                                            unit A/m
+var jd_in "gmid.jd(\"nfet_01v8\", gm_id_in, L_in)"    var gm_id_in "gmid.gm_id_jd(\"nfet_01v8\", jd_in, L_in)"
+  unit A/m                                            unit 1/V
+var W_in "gmid.w(\"nfet_01v8\", gm_id_in, L_in, id_in)" var W_in "gmid.w_jd(\"nfet_01v8\", jd_in, L_in, id_in)"
+  unit m                                              unit m
+var gm_in "gmid.gm(\"nfet_01v8\", gm_id_in, L_in, id_in)" var gm_in "gmid.gm_jd(\"nfet_01v8\", jd_in, L_in, id_in)"
+  unit S                                              unit S
+var A_in "gmid.gain(\"nfet_01v8\", gm_id_in, L_in)"  var A_in "gmid.gain_jd(\"nfet_01v8\", jd_in, L_in)"
+var ft_in "gmid.ft(\"nfet_01v8\", gm_id_in, L_in)"   var ft_in "gmid.ft_jd(\"nfet_01v8\", jd_in, L_in)"
+  unit Hz                                             unit Hz
+```
+
+| | gm/Id-driven | Id/W-driven |
+|---|---|---|
+| picked | gm/Id = 15 1/V | Id/W = 2.576 A/m |
+| read | Id/W = 2.5764 A/m | gm/Id = 15.0006 1/V |
+| W | 3.8814 µm | 3.8820 µm |
+| gm | 150.00 µS | 150.01 µS |
+| gm/gds | 112.21 | 112.21 |
+| ft | 2.4146 GHz | 2.4143 GHz |
+
+The 0.02 % in W is the four digits typed for `jd_in`; with `jd_in` set to the gm/Id flow's
+`gmid.jd(…)` value (2.5763959056726686) the Id/W flow gives gm/Id = 15 and W = 3.8813910462992726
+µm, the same bits.
 
 ## `gmid.chars`
 
@@ -151,9 +238,11 @@ device nfet_01v8
   then read that one binary raw file (parsed in one event) → when the last block arrives, build
   the LUT, load it, re-declare the functions → write the `lut` path. Each step starts on the previous
   step's `IoDone`, so the plugin does not rely on the host running requests in issue order;
-  ≤ 256 requests pending. A failed write, a non-zero simulator exit (the log carries the tail of
-  its output), a missing or malformed data or raw file only log an error; the loaded table is
-  kept.
+  ≤ 256 requests pending. A failed write, a non-zero simulator exit, a missing or malformed data
+  or raw file only log an error; the loaded table is kept. A failed simulator's output goes to
+  `.schemify/gmid/work/<dev>.log` and the log names that file: simulator output can quote the
+  PDK's model files, which may be proprietary, so no kit text reaches the log (nor a docs page:
+  the functions answer only numbers).
 
 `ponytail:` characterization uses the `spawn` capability, not core `run` requests, because the
 ABI does not allow it yet: a plugin `run` record names a bench that is already a project cell
@@ -316,11 +405,11 @@ dip. At gm/Id = 15, L = 0.5 µm the nfet has jd ≈ 2.6 A/m, gain ≈ 112 and ft
 `nix develop` gives the toolchain (Rust 1.95.0 with rust-lld from the rust-overlay rev Schemify builds with,
 ngspice, Xyce, the C++ toolchain). Schemify crates come in as git dependencies pinned to one
 Schemify commit (`rev` in `Cargo.toml`); for work against a local Schemify checkout, add
-`[patch."https://github.com/OpenFAT/Schemify"]` entries pointing at its `crates/abi` and
-`crates/plugin` in a `.cargo/config.toml` you do not commit.
+`[patch."https://github.com/OpenFAT/Schemify"]` entries pointing at its `crates/protocol/abi` and
+`crates/plugins/plugin` in a `.cargo/config.toml` you do not commit.
 
 - `./build.sh` builds `gmid_lut.wasm` for `wasm32-unknown-unknown` at the repository root
-  (limit 200 KB, it is ≈ 177 KB), byte-reproducibly: host paths are remapped. Commit the module
+  (limit 200 KB, it is ≈ 179 KB: 178 665 bytes), byte-reproducibly: host paths are remapped. Commit the module
   with the source change; CI fails when they disagree.
 - Native tests (the guest glue is `cfg(target_arch = "wasm32")`, everything else is plain Rust):
   `cargo test`. Unit tests cover the format round
@@ -328,7 +417,11 @@ Schemify commit (`rev` in `Cargo.toml`); for work against a local Schemify check
   accuracy against the analytic model (also off the nominal VDS), monotonicity (jd, ft, VGS
   fall and W grows with gm/Id; gain grows and ft falls with L), a synthetic gm/Id dip, the `_at`
   variants (equal to the plain functions at the nominal VDS), error paths, and the plausibility
-  of the committed sky130 samples; the ESPice config rules, deck text, a recorded ESPice
+  of the committed sky130 samples; for the Id/W family, accuracy against the analytic model
+  from weak to strong inversion, the round trip gm/Id → Id/W → gm/Id and twin-function agreement
+  on the EKV and sky130 tables (table above), Id/W keys across a gm/Id dip, a branch that ends
+  where the current turns, and its negative space (out of range, cutoff, non-numeric, wrong
+  arity, VDS off the axis, free fn_ids); the ESPice config rules, deck text, a recorded ESPice
   `.op`/`.ac` plot pair (`tests/fixtures/espice_op_ac.raw`), and the raw parser's negative
   space (truncation, ASCII, off-grid, unpaired or reordered plots, a header that changes).
   `tests/guest.rs` loads the built `gmid_lut.wasm` in wasmi (run `./build.sh` first) and

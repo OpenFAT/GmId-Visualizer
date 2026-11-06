@@ -18,13 +18,13 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 # Pinned to a Schemify commit; the nightly workflow tests against Schemify `main` instead.
-schemify-abi = { git = "https://github.com/OpenFAT/Schemify", rev = "1752960b3906f9b29765222531b5bfe29e8f6542", features = ["guest"] }
+schemify-abi = { git = "https://github.com/OpenFAT/Schemify", rev = "39da966d2ae77d7dbb0325d32c0b80d136f0262e", features = ["guest"] }
 
 [dev-dependencies]
 # Drives the built guest in `tests/guest.rs` (event chain, fuel, `schemify_call`); same engine
 # configuration as the host (Schemify's `crates/plugin`).
 # The real host (`tests/host.rs`): what the editor loads the package with.
-schemify-plugin = { git = "https://github.com/OpenFAT/Schemify", rev = "1752960b3906f9b29765222531b5bfe29e8f6542" }
+schemify-plugin = { git = "https://github.com/OpenFAT/Schemify", rev = "39da966d2ae77d7dbb0325d32c0b80d136f0262e" }
 wasmi = { version = "2", default-features = false, features = ["std", "validate", "auto-dispatch", "deterministic"] }
 
 [lints.rust]

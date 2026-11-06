@@ -129,7 +129,7 @@ pub fn parse(src: &str) -> Result<Vec<Device>, String> {
             match text::body_line(line).map_err(|_| fail("malformed attribute line"))? {
                 BodyLine::Blank | BodyLine::Comment => {}
                 BodyLine::Verbatim(_) => return Err(fail("unexpected `|` line")),
-                BodyLine::Attr(key, vals) => a.set(key, vals).map_err(|e| fail(&e))?,
+                BodyLine::Attr { word, values } => a.set(word, values).map_err(|e| fail(&e))?,
             }
         }
         let lut = a
@@ -324,6 +324,13 @@ pub fn netlist_path(name: &str) -> String {
 /// device `name`; ngspice writes it verbatim.
 pub fn data_path(name: &str, n: usize) -> String {
     format!("{WORK_DIR}/{name}.{n}.data")
+}
+
+/// Project-relative file the simulator's output goes to when a characterization of device
+/// `name` fails. The output can quote the PDK's model files, so it is written here, inside the
+/// project, and never to the log.
+pub fn log_path(name: &str) -> String {
+    format!("{WORK_DIR}/{name}.log")
 }
 
 /// Project-relative raw file ESPice writes for device `name` ([`Sim::Espice`]).
